@@ -1,0 +1,8 @@
+README.md
+setup.py
+src/anon_sbm.egg-info/PKG-INFO
+src/anon_sbm.egg-info/SOURCES.txt
+src/anon_sbm.egg-info/dependency_links.txt
+src/anon_sbm.egg-info/top_level.txt
+src/sbm/__init__.py
+src/sbm/sbm.py
