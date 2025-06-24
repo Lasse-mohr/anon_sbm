@@ -2,39 +2,48 @@ from typing import Optional, Tuple, Dict
 import numpy as np
 
 #from src.sbm.graph_data import GraphData
-from src.sbm.block_data import BlockData
-from src.sbm.likelihood import LikelihoodCalculator
-from src.sbm.move import MoveProposer, MoveExecutor
+from sbm.block_data import BlockData
+from sbm.likelihood import LikelihoodCalculator
+from sbm.block_change_proposers import ChangeProposer
+from sbm.node_mover import NodeMover
+from sbm.utils.logger import CSVLogger
+
+from sbm.block_change_proposers import ChangeProposer, ChangeProposerName
+
+#### Aliases
+ChangeProposerDict = Dict[ChangeProposerName, ChangeProposer] 
 
 class MCMCAlgorithm:
     def __init__(self,
                  block_data: BlockData,
                  likelihood_calculator: LikelihoodCalculator,
-                 move_proposer: MoveProposer,
-                 move_executor: MoveExecutor,
-                 seed: Optional[int] = None):
+                 change_proposer: ChangeProposerDict,
+                 rng: np.random.Generator,
+                 log: bool = True
+                 ):
+        self.move_probabilities = { "swap": 1 }
 
-        self.acceptance_counts = {
-            'move_node': {'proposed': 0, 'accepted': 0},
-            'split_block': {'proposed': 0, 'accepted': 0},
-            'merge_blocks': {'proposed': 0, 'accepted': 0}
-            }
-        self.move_probabilities = {
-            'move_node': 1/3,
-            'split_block': 1/3,
-            'merge_blocks': 1/3
-            }
         self.block_data = block_data
         self.likelihood_calculator = likelihood_calculator
-        self.move_proposer = move_proposer
-        self.move_executor = move_executor
-        self.rng = np.random.default_rng(seed)
-        self.temperature = None
-        self.current_ll = self.likelihood_calculator.compute_likelihood()
-        # Initialize acceptance counts and move probabilities
+        self.change_proposers = change_proposer
+        self.node_mover = NodeMover(block_data=block_data)
+        self.rng = rng
+        self.current_ll = self.likelihood_calculator.ll
+        self.log = log # True if logging is enabled, False otherwise.
 
-    def fit(self, num_iterations: int, min_block_size: int, initial_temperature: float, cooling_rate: float,
-                target_acceptance_rate: float = 0.25, max_blocks: Optional[int] = None) -> None:
+        # store the best block assignment and likelihood
+        self._best_block_assignment = block_data.blocks.copy()
+        self._best_block_conn = block_data.block_connectivity.copy()
+        self.best_ll = self.likelihood_calculator.ll
+
+    def fit(self,
+            num_iterations: int,
+            initial_temperature: float = 1,
+            cooling_rate: float = 0.99,
+            min_block_size: Optional[int] = None,
+            max_blocks: Optional[int] = None,
+            logger: Optional[CSVLogger] = None,    
+        ) -> None:
         """
         Run the adaptive MCMC algorithm to fit the SBM to the network data.
 
@@ -47,27 +56,40 @@ class MCMCAlgorithm:
         """
         temperature = initial_temperature
         current_ll = self.likelihood_calculator.compute_likelihood()
+        acceptance_rate = 0 # acceptance rate of moves between logging
+
+        if logger:
+            logger.log(0, current_ll, acceptance_rate, temperature)
 
         for iteration in range(1, num_iterations + 1):
             move_type = self._select_move_type()
-            delta_ll, move_accepted = self._attempt_move(move_type, min_block_size, temperature, max_blocks)
-            # Update acceptance counts
-            self.acceptance_counts[move_type]['proposed'] += 1
-            if move_accepted:
-                self.acceptance_counts[move_type]['accepted'] += 1
-                current_ll += delta_ll
+
+            delta_ll, move_accepted = self._attempt_move(
+                move_type=move_type,
+                min_block_size=min_block_size,
+                temperature=temperature,
+                max_blocks=max_blocks
+                )
+
+            # update likelihood and best assignment so far
+            if move_accepted :
+                self.current_ll += delta_ll
+                if logger:
+                    acceptance_rate += 1
+
+                if self.current_ll < self.best_ll:
+                    self.best_ll = current_ll
+                    self._best_block_assignment = self.block_data.blocks.copy()
+                    self._best_block_conn = self.block_data.block_connectivity.copy()
 
             # Update temperature
             temperature = self._update_temperature(temperature, cooling_rate)
 
             # Log and adjust proposal probabilities every 100 iterations
-            if iteration % 100 == 0:
-                acceptance_rates = {
-                    move: self.acceptance_counts[move]['accepted'] / max(self.acceptance_counts[move]['proposed'], 1)
-                    for move in self.move_probabilities
-                }
-                self._update_move_probabilities(acceptance_rates, target_acceptance_rate)
-                self._log_iteration(iteration, current_ll, temperature, acceptance_rates)
+            if logger and iteration % logger.log_every == 0:
+                acceptance_rate = acceptance_rate / logger.log_every
+                logger.log(iteration, self.current_ll, acceptance_rate, temperature)
+                acceptance_rate = 0
 
     def _select_move_type(self) -> str:
         """
@@ -75,15 +97,19 @@ class MCMCAlgorithm:
 
         :return: The selected move type.
         """
-        move_type = self.rng.choice(list(self.move_probabilities.keys()), p=list(self.move_probabilities.values()))
+        move_type = 'swap'
         return move_type
 
-    def _attempt_move(self, move_type: str, min_block_size: int, temperature: float,
-                      max_blocks: Optional[int]) -> Tuple[float, bool]:
+    def _attempt_move(self,
+                      move_type: str,
+                      temperature: float,
+                      max_blocks: Optional[int] = None,
+                      min_block_size: Optional[int] = None,
+        ) -> Tuple[float, bool]:
         """
         Attempt a move of the specified type.
 
-        :param move_type: The type of move to attempt ('move_node', 'split_block', 'merge_blocks').
+        :param move_type: The type of move to attempt ('swap').
         :param min_block_size: Minimum allowed size for any block.
         :param temperature: Current temperature for simulated annealing.
         :param max_blocks: Optional maximum number of blocks allowed.
@@ -91,68 +117,26 @@ class MCMCAlgorithm:
         """
         delta_ll, move_accepted = 0.0, False
 
-        if move_type == 'move_node':
-            # Propose moving a node between blocks
-            proposal = self.move_proposer.propose_move_node(min_block_size)
-            if proposal:
-                node, source_block, target_block = proposal
-                # Compute change in log-likelihood and accept/reject move
-                delta_ll = self.likelihood_calculator._compute_delta_ll_move_node(
-                    node=node,
-                    source_block=source_block,
-                    target_block=target_block
-                    )
+        if move_type == 'swap':
+            # Propose a swap of two nodes
+            proposed_change, proposed_delta_e, proposed_delta_n = \
+                self.change_proposers['swap'].propose_change()
 
-                move_accepted = self._accept_move(
-                    delta_ll=delta_ll,
-                    temperature=temperature)
+            # Compute change in log-likelihood and accept/reject move
+            delta_ll = self.likelihood_calculator.compute_delta_ll(
+                delta_e=proposed_delta_e,
+                delta_n=proposed_delta_n
+                )
 
-                if move_accepted:
-                    self.move_executor.move_node(
-                        node=node,
-                        source_block=source_block,
-                        target_block=target_block
-                        )
-
-        elif move_type == 'split_block':
-            # propose splitting a block
-            proposal = self.move_proposer.propose_split_block(min_block_size=min_block_size)
-            if proposal and (max_blocks is None or len(self.block_data.block_members) < max_blocks):
-                block_to_split, nodes_a, nodes_b = proposal
-
-                # Compute change in log-likelihood and accept/reject move
-                delta_ll = self.likelihood_calculator.compute_delta_ll_split_block(
-                    block_to_split=block_to_split,
-                    nodes_a=nodes_a,
-                    nodes_b=nodes_b
-                    )
-                move_accepted = self._accept_move(delta_ll, temperature)
-                if move_accepted:
-                    self.move_executor.split_block(
-                        block_to_split=block_to_split,
-                        nodes_a=nodes_a,
-                        nodes_b=nodes_b
-                        )
-
-        elif move_type == 'merge_blocks':
-            # Propose merging two blocks
-            proposal = self.move_proposer.propose_merge_blocks()
-            if proposal and len(self.block_data.block_members) > 1:
-                block_a, block_b = proposal
-                # Compute change in log-likelihood and accept/reject move
-                delta_ll = self.likelihood_calculator._compute_delta_ll_merge_blocks(
-                    block_a=block_a,
-                    block_b=block_b
-                    )
-                move_accepted = self._accept_move(delta_ll, temperature)
-                if move_accepted:
-                    self.move_executor.merge_blocks(block_a, block_b)
+            move_accepted = self._accept_move(delta_ll, temperature)
+            if move_accepted:
+                self.node_mover.perform_change(proposed_change, proposed_delta_e)
         else:
-            pass  # Unknown move type
-
+            raise ValueError(f"Invalid move type: {move_type}. Only 'swap' is currently supported.")
+        
         return delta_ll, move_accepted
 
-    def _accept_move(self, delta_ll: float, temperature: float) -> bool:
+    def _accept_move(self, delta_ll: float, temperature: float, eps:float=1e-6) -> bool:
         """
         Determine whether to accept a proposed move based on likelihood change and temperature.
 
@@ -160,9 +144,13 @@ class MCMCAlgorithm:
         :param temperature: Current temperature for simulated annealing.
         :return: True if move is accepted, False otherwise.
         """
-        if delta_ll > 0:
+        if delta_ll < 0:
             return True
-        return self.rng.uniform() < np.exp(delta_ll / temperature)
+
+        temperature = max(temperature, eps)  # Avoid division by zero
+        z = min(delta_ll / temperature, 700) # clip to avoid overflow in exp
+
+        return self.rng.uniform() > np.exp(z)
 
     def _update_temperature(self, current_temperature: float, cooling_rate: float) -> float:
         """
@@ -173,28 +161,3 @@ class MCMCAlgorithm:
         :return: The updated temperature.
         """
         return current_temperature * cooling_rate
-
-    def _update_move_probabilities(self, acceptance_rates: Dict[str, float], target_acceptance_rate: float) -> None:
-        """
-        Adjust the move proposal probabilities based on acceptance rates.
-
-        :param acceptance_rates: The acceptance rates for each move type.
-        :param target_acceptance_rate: The desired overall acceptance rate.
-        """
-        adjustment = {move: acceptance_rates[move] / target_acceptance_rate if target_acceptance_rate > 0 else 1.0
-                      for move in self.move_probabilities}
-        total_adjustment = sum(adjustment.values())
-        self.move_probabilities = {move: adjustment[move] / total_adjustment for move in self.move_probabilities}
-
-    def _log_iteration(self, iteration: int, current_ll: float, temperature: float,
-                       acceptance_rates: Dict[str, float]) -> None:
-        """
-        Log the current state of the algorithm for monitoring.
-
-        :param iteration: The current iteration number.
-        :param current_ll: The current log-likelihood.
-        :param temperature: The current temperature.
-        :param acceptance_rates: The acceptance rates for each move type.
-        """
-        print(f"Iteration {iteration}: LL={current_ll:.4f}, Temp={temperature:.4f}, "
-              f"Acceptance Rates={acceptance_rates}")

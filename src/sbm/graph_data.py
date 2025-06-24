@@ -1,23 +1,18 @@
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_array
 
 class GraphData:
-    def __init__(self, adjacency_matrix: csr_matrix, directed=False):
-        if not isinstance(adjacency_matrix, csr_matrix):
-            raise ValueError("Adjacency matrix must be a scipy.sparse.csr_matrix")
+    def __init__(self, adjacency_matrix: csr_array, directed=False):
+        if not isinstance(adjacency_matrix, csr_array):
+            raise ValueError("Adjacency matrix must be a scipy.sparse.csr_array")
 
-        self.adjacency = adjacency_matrix
+        self.adjacency = adjacency_matrix.astype(int)
+        self.directed: bool= directed
+        self.num_nodes = self.adjacency.shape[0] # type: ignore
         
-        if adjacency_matrix.shape is not None:
-            self.num_nodes = adjacency_matrix.shape[0]
-        else:
-            raise ValueError("Adjacency has no shape attribute")
-        
-        self.total_edges = self.adjacency.sum()
-
         if directed:
-            self.total_edges = self.adjacency.sum()
+            self.total_edges = int(self.adjacency.sum())
         else:
-            self.total_edges = self.adjacency.sum() / 2  # For undirected graphs
+            self.total_edges = int(self.adjacency.sum() / 2)  # For undirected graphs
         
         def __len__(self):
             return self.num_nodes

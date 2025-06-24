@@ -1,0 +1,21 @@
+# -------------------------------------------------------------------
+#  Global defaults
+# -------------------------------------------------------------------
+seed: 42                 # RNG seed forwarded to NumPy & Metis
+min_block_size: 10       # target k
+n_iter: 5_000             # total MCMC iterations
+temperature: 1.0         # initial annealing temperature
+cooling_rate: 0.999
+force_undirected: true   # force undirected graphs to be undirected
+logging_folder: "./logs/"
+log_every: 1000
+
+# -------------------------------------------------------------------
+#  List of empirical graphs to process
+#  Each item needs:
+#    name : label used for output folder (models/sbm/<name>/)
+#    path : relative or absolute path to the processed graph file
+# -------------------------------------------------------------------
+datasets:
+  - name: congress_twitter
+    path: data/processed/congress.edgelist # undirected GML
