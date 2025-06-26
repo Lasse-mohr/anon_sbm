@@ -1,0 +1,66 @@
+# -------------------------------------------------------------------
+#  Global defaults
+# -------------------------------------------------------------------
+seed: 42
+
+# -------------------------------------------------------------------
+#  Configuration for the SBM models fitting as list of dicts
+# Each item needs:
+#    min_block_size: minimum size of the blocks
+#    n_iter: number of iterations for the fitting
+#    temperature: initial temperature for the simulated annealing
+#    cooling_rate: cooling rate for the simulated annealing
+#    force_undirected: whether to treat the graph as undirected
+# -------------------------------------------------------------------
+sbm:
+  - min_block_size: 3
+    n_iter: 10_000
+    temperature: 1.0
+    cooling_rate: 0.999
+    force_undirected: true
+    init_method: "ProneKMeans"
+
+  - min_block_size: 6
+    n_iter: 10_000
+    temperature: 1.0
+    cooling_rate: 0.999
+    force_undirected: true
+    init_method: "ProneKMeans"
+
+  - min_block_size: 12
+    n_iter: 10_000
+    temperature: 1.0
+    cooling_rate: 0.999
+    force_undirected: true
+    init_method: "ProneKMeans"
+
+  - min_block_size: 25
+    n_iter: 10_000
+    temperature: 1.0
+    cooling_rate: 0.999
+    force_undirected: true
+    init_method: "ProneKMeans"
+# -------------------------------------------------------------------
+#  Configuration for the logging
+#  - logging_folder: folder to save the logs
+#  - overwirte: set true to ignore cached results
+#  - log_every: how often to log the results (in number of iterations)
+# -------------------------------------------------------------------
+logging:
+  - logging_folder: "./logs/"
+    overwirte: true           # set true to ignore cached results
+    log_every: 100
+
+# -------------------------------------------------------------------
+#  List of empirical graphs to process
+#  Each item needs:
+#    name : label used for output folder (models/sbm/<name>/)
+#    path : relative or absolute path to the processed graph file
+# -------------------------------------------------------------------
+datasets:
+  - name: congress_twitter
+    path: data/processed/congress_twitter.edgelist # undirected GML
+  - name: caltech_fb 
+    path: data/processed/caltech_fb.edgelist # undirected GML
+  - name: eu_email
+    path: data/processed/eu_email.edgelist # undirected GML

@@ -41,8 +41,8 @@ def clustering_distance(
         )
     else:
         # Undirected clustering coefficient
-        emp_graph = nx.from_scipy_sparse_array(emp_adj)
-        sur_graph = nx.from_scipy_sparse_array(sur_adj)
+        emp_graph = nx.from_scipy_sparse_matrix(emp_adj)
+        sur_graph = nx.from_scipy_sparse_matrix(sur_adj)
 
         emp_clustering = nx.average_clustering(emp_graph)
         sur_clustering = nx.average_clustering(sur_graph)

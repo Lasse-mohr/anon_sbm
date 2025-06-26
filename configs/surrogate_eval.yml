@@ -1,7 +1,5 @@
 # ---------------------------------------------------------------
-seed: 1
-min_block_size: 10
-n_surrogates: 30 # graphs to sample per dataset
+n_surrogates: 10 # graphs to sample per dataset
 overwrite: true # set true to ignore cached results
 
 # which similarity metrics to compute
@@ -9,10 +7,3 @@ metrics:
   - shortest_path
   - degree
   - clustering
-
-# list of empirical datasets (must exist under data/processed and models/sbm)
-datasets:
-  - name: congress_twitter
-    graph: data/processed/congress.edgelist
-    sbm_model: models/sbm/congress_twitter
-

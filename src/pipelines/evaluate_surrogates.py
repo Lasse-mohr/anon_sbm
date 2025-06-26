@@ -6,19 +6,13 @@ import scipy.sparse as sp
 from metrics import REGISTRY
 from sbm.io import GraphLoader
 
-def load_csr_npz(fn: Path):
-    with np.load(fn) as z:
-        return sp.csr_matrix(
-            (z["data"], z["indices"], z["indptr"]),
-            shape=z["shape"]
-        )
-
+from sbm.utils.pipeline_utils import load_csr_npz
 
 def main(cfg):
     cfg = yaml.safe_load(Path(cfg).read_text())
-    results = []
 
     for ds in cfg["datasets"]:
+        results = []
         emp = GraphLoader.load(Path(ds["graph"])).adjacency
         surr_dir = Path("data/surrogates") / ds["name"]
 
@@ -30,12 +24,12 @@ def main(cfg):
             results.append(row)
             print("evaluated", surr_file)
 
-    out = Path("results") / "surrogate_metrics.csv"
-    out.parent.mkdir(exist_ok=True)
-    with out.open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=results[0].keys())
-        w.writeheader(); w.writerows(results)
-    print("saved", out)
+        out = Path("results") / f"surrogate_metrics.csv"
+        out.parent.mkdir(exist_ok=True)
+        with out.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=results[0].keys())
+            w.writeheader(); w.writerows(results)
+        print("saved", out)
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(); p.add_argument("cfg"); main(p.parse_args().cfg)

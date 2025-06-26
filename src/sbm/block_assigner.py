@@ -5,12 +5,18 @@
 """
 from typing import List, Dict, Optional, Tuple, Iterable
 from collections import defaultdict
+
+from time import time
+
 import pymetis
 import scipy.sparse as sp
 import numpy as np
+from k_means_constrained import KMeansConstrained
+from nodevectors import ProNE
 
 from sbm.block_data import BlockData
 from sbm.graph_data import GraphData
+from sbm.utils.pipeline_utils import InitMethodName
 
 #  helper ---------------------------------------------------------------
 def _block_sizes(blocks: Dict[int, int]) -> Dict[int, int]:
@@ -18,6 +24,25 @@ def _block_sizes(blocks: Dict[int, int]) -> Dict[int, int]:
     for b in blocks.values():
         sizes[b] += 1
     return sizes
+
+def _compute_acceptors(sizes, acceptor_size:int, max_increments: int = 1000):
+
+    acceptors = {b for b, sz in sizes.items() if sz == acceptor_size}
+    curr_increment = 0
+
+    while len(acceptors) == 0:
+        acceptor_size += 1
+        curr_increment += 1
+
+        acceptors = {b for b, sz in sizes.items() if sz == acceptor_size}
+
+        if curr_increment >= max_increments:
+            raise ValueError(
+                "Cannot balance blocks to min_block_size."
+            )
+
+    return acceptors, acceptor_size
+
 
 #  Mixin – functions for balancing block sizes of proposed block partition --
 def rebalance_to_min_size(
@@ -91,8 +116,11 @@ def rebalance_to_min_size(
     # -----------------------------------------------------------------
     # 3. distribute remaining ( < k ) nodes
     # -----------------------------------------------------------------
+
     # keep a fast lookup of which *existing* blocks can still accept 1
-    acceptors = {b for b, sz in sizes.items() if sz == min_block_size}
+    # first blocks of size `min_block_size` can accept 1 more node
+    # if we run out, we increment size constraints on which blocks can accept
+    acceptors, acceptor_size = _compute_acceptors(sizes, min_block_size)
 
     rng = np.random.default_rng(42)  # deterministic for tests
 
@@ -101,7 +129,7 @@ def rebalance_to_min_size(
         neigh_blocks = {
             blocks[u]
             for u in adjacency.indices[adjacency.indptr[v] : adjacency.indptr[v + 1]]
-            if sizes.get(blocks[u], 0) == min_block_size
+            if sizes.get(blocks[u], 0) == acceptor_size
         }
         target = None
         if neigh_blocks:
@@ -110,13 +138,18 @@ def rebalance_to_min_size(
             # 3b. random among remaining acceptors
             target = rng.choice(list(acceptors))
         else:
-            raise RuntimeError("No available block can accept extra nodes")
+            # we have run out of acceptors, so we need to increase the size
+            acceptors, acceptor_size = _compute_acceptors(sizes, acceptor_size)
+            target = rng.choice(list(acceptors))
+
+
 
         # assign
         blocks[v] = target
         sizes[target] += 1
         if sizes[target] == min_block_size + 1:
             acceptors.discard(target)
+        pool.remove(v)
 
     return blocks
 
@@ -164,24 +197,10 @@ class BlockAssigner:
         raise NotImplementedError(
             "compute_assignment must be implemented by subclasses of BlockAssigner."
         )
-
+    
     def compute_assignment(self) -> BlockData:
-        """
-        Compute a balanced block assignment based on the proposed assignment.
-
-        Currently, this method only performs a min_size balancing step.
-        """
-        proposed_assignment = self._compute_assignment()
-        balanced_assignment = self.min_size_balancers(
-            blocks=proposed_assignment,
-            adjacency=self.graph_data.adjacency,
-            min_block_size=self.min_block_size,
-        )
-        reindexed_assignment = self.reindex_blocks(balanced_assignment)
-
-        return BlockData(
-            initial_blocks=reindexed_assignment,
-            graph_data=self.graph_data
+        raise NotImplementedError(
+            "compute_assignment must be implemented by subclasses of BlockAssigner."
         )
 
 
@@ -215,6 +234,24 @@ class UniformSmallBlockAssigner(BlockAssigner):
         }
 
         return block_assignments
+    
+    def compute_assignment(self) -> BlockData:
+        """
+        Compute a block assignment based on the proposed assignment.
+        Currently, this method only performs a min_size balancing step.
+        """
+        proposed_assignment = self._compute_assignment()
+        balanced_assignment = self.min_size_balancers(
+            blocks=proposed_assignment,
+            adjacency=self.graph_data.adjacency,
+            min_block_size=self.min_block_size,
+        )
+        reindexed_assignment = self.reindex_blocks(balanced_assignment)
+
+        return BlockData(
+            initial_blocks=reindexed_assignment,
+            graph_data=self.graph_data
+        )
 
 
 class MetisBlockAssigner(BlockAssigner):
@@ -301,3 +338,193 @@ class MetisBlockAssigner(BlockAssigner):
 
         # Wrap in BlockData so downstream code can use it directly
         return blocks
+
+    def compute_assignment(self) -> BlockData:
+        """
+        Compute a balanced block assignment based on the proposed assignment.
+
+        Currently, this method only performs a min_size balancing step.
+        """
+        proposed_assignment = self._compute_assignment()
+        balanced_assignment = self.min_size_balancers(
+            blocks=proposed_assignment,
+            adjacency=self.graph_data.adjacency,
+            min_block_size=self.min_block_size,
+        )
+        reindexed_assignment = self.reindex_blocks(balanced_assignment)
+
+        return BlockData(
+            initial_blocks=reindexed_assignment,
+            graph_data=self.graph_data
+        )
+
+
+class EmbedAndConstrKMeansAssigner(BlockAssigner):
+    """
+    Assign nodes to blocks using a two-step process:
+    1. use embed nodes into a low-dimensional space,
+    2. use constrained KMeans to assign nodes to blocks of prespecified sizes.
+    """ 
+
+    def __init__(
+        self,
+        graph_data: GraphData,
+        rng: np.random.Generator,
+        num_blocks: Optional[int] = None,
+        min_block_size: Optional[int] = None,
+        max_block_size: Optional[int] = None,
+    ) -> None:
+        super().__init__(
+            graph_data=graph_data,
+            rng=rng,
+            num_blocks=num_blocks,
+            min_block_size=min_block_size,
+            max_block_size=max_block_size,
+        )
+
+        if min_block_size is None:
+            raise ValueError("num_blocks and min_block_size must be specified for ProneAndConstrKMeansAssigner.")
+        if num_blocks is not None:
+            Warning("num_blocks is ignored in ProneAndConstrKMeansAssigner. Only min_block_size is used.")
+        if max_block_size is not None:
+            Warning("max_block_size is ignored in ProneAndConstrKMeansAssigner. Only min_block_size is used.")
+
+    def embed_nodes(self, adjacency:sp.csr_array, n_dimensions:int=128)->np.ndarray:
+        """ 
+        Method to perform node embedding. Subclasses should implement this method
+        """
+        raise NotImplementedError("This method should be overwritten by subclasses to provide specific embedding logic.")
+
+    def _compute_assignment(self) -> Dict[int, int]:
+        """
+        Compute block assignments using constrained KMeans after embedding with Prone.
+        """
+        if self.graph_data.num_nodes < self.min_block_size:
+            raise ValueError("Number of nodes in the graph is less than min_block_size.")
+        if self.min_block_size is None:
+            raise ValueError("min_block_size must be specified for ProneAndConstrKMeansAssigner.")
+
+        # Step 1: Embed nodes using Prone
+        embeddings = self.embed_nodes(
+            adjacency=self.graph_data.adjacency,
+            n_dimensions=128  # default embedding dimension
+        )
+
+        # compute how many blocks we need to only have blocks of
+        #   size min_block_size and min_block_size+1
+        number_of_clusters = self.graph_data.num_nodes // self.min_block_size
+        
+        # Step 2: Use constrained KMeans to assign nodes to blocks
+        kmeans = KMeansConstrained(
+                    n_clusters=number_of_clusters,
+                    size_min=self.min_block_size,
+                    size_max=self.min_block_size+1, # 
+                    init='k-means++',
+                    n_init=10,
+                    max_iter=300,
+                    tol=1e-3,
+                    verbose=False,
+                    random_state=self.rng.choice(2**32), 
+                    copy_x=True,
+                    n_jobs=-2 # use all but one CPU core
+                )
+        tic = time() 
+        labels = kmeans.fit_predict(embeddings)
+        toc = time()
+        print(f"KMeans with constraints took {toc - tic:.2f} seconds for {
+            self.graph_data.num_nodes} nodes and {embeddings.shape[1]} dimensions."
+        )
+
+        # Create a mapping from node index to block ID
+        blocks = {node: label for node, label in enumerate(labels)} # type: ignore
+
+        return blocks
+    
+    def compute_assignment(self) -> BlockData:
+        """
+        Compute a block assignment based on the proposed assignment.
+        Currently, this method only performs a min_size balancing step.
+        """
+        balanced_assignment = self._compute_assignment() # balanced from k-means w. size constraints
+        reindexed_assignment = self.reindex_blocks(balanced_assignment)
+
+        return BlockData(
+            initial_blocks=reindexed_assignment,
+            graph_data=self.graph_data
+        )
+
+
+class ProNEAndConstrKMeansAssigner(EmbedAndConstrKMeansAssigner):
+    """
+    Assign nodes to blocks using ProNE embedding followed by constrained KMeans.
+    """
+
+    def embed_nodes(self, adjacency: sp.csr_array, n_dimensions: int = 128) -> np.ndarray:
+        """
+        Embed nodes using ProNE.
+        """
+        if n_dimensions <= 0:
+            raise ValueError("n_dimensions must be a positive integer.")
+
+        # Create a ProNE instance and fit it to the adjacency matrix
+        model = ProNE(
+                    n_components=n_dimensions,
+                    step=10,
+                    mu=0.2,
+                    theta=0.5, 
+                    exponent=0.75,
+                    verbose=True
+                )
+        tic = time()        
+        embeddings = model.fit_transform(
+            sp.csr_matrix(adjacency) # nodevectors expect a CSR matrix, and not array
+            )
+        toc = time()
+        print(f"ProNE embedding took {toc - tic:.2f} seconds for {
+            self.graph_data.num_nodes} nodes and {n_dimensions} dimensions."
+        )
+
+        return embeddings
+
+class AssignerConstructor:
+    """ 
+    Factory class to construct block assigners based on configuration parameters. 
+
+    """
+
+    def __init__(self, rng: np.random.Generator):
+        self.rng = rng
+
+    def create_assigner(self,
+                        graph_data: GraphData,
+                        init_method: InitMethodName = "metis", 
+                        min_block_size: Optional[int] = None,
+                        max_block_size: Optional[int] = None,
+                        num_blocks: Optional[int] = None,
+                    ) -> BlockAssigner:
+
+        if init_method == "metis":
+            return MetisBlockAssigner(
+                graph_data=graph_data,
+                rng=self.rng,
+                min_block_size=min_block_size,
+                max_block_size=max_block_size,
+                num_blocks=num_blocks,
+            )
+        elif init_method == "random":
+            return UniformSmallBlockAssigner(
+                graph_data=graph_data,
+                rng=self.rng,
+                min_block_size=min_block_size,
+                max_block_size=max_block_size,
+                num_blocks=num_blocks,
+            )
+        elif init_method == "ProneKMeans":
+            return ProNEAndConstrKMeansAssigner(
+                graph_data=graph_data,
+                rng=self.rng,
+                min_block_size=min_block_size,
+                max_block_size=max_block_size,
+                num_blocks=num_blocks,
+            )
+

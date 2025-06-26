@@ -24,7 +24,8 @@ def _er_graph(n: int=10, p: float=0.1, *, seed: int=1) -> csr_array:
 #### test functions
 def test_shortest_path_identical_line():
     A = _line_graph()
-    assert shortest_path_distance(A, A) == 0.0
+    print(A.toarray())
+    assert shortest_path_distance(A, A, n_samples=None) == 0.0
 
 def test_degree_identical_line():
     A = _line_graph()
@@ -51,7 +52,7 @@ def test_clustering_identical_er():
 
 def test_shortest_path_identical_er():
     A = _er_graph(p=0.9)
-    assert shortest_path_distance(A, A) == 0.0
+    assert shortest_path_distance(A, A, n_samples=None) == 0.0
 
 def test_shortest_path_different_er():
     A = _er_graph(n=20, p=0.9)

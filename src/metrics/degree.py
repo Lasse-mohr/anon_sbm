@@ -7,7 +7,6 @@ their adjacency matrices.
 # metrics/degree.py
 from typing import Optional
 import numpy as np
-import networkx as nx
 from scipy.stats import wasserstein_distance #  1-D EMD
 from scipy.sparse import csr_array
 

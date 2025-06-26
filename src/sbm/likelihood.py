@@ -20,10 +20,11 @@ def _bernoulli_ll_block_pair(e: int, n: int, eps:float= 1e-6) -> float:
     e: number of edges between block pair.
     n: number of possible pairs between block pair.
     """
-    if n <= 0:
-        raise ValueError("Number of possible pairs (n) must be greater than 0.")
+
     if e == 0: # 0 · log 0 := 0   (limit)
         return 0.0
+    elif n <= 0:
+        raise ValueError("Number of possible pairs (n) must be greater than 0.")
     
     # clip to avoid overflow in lo
     pos = max(e/n, eps)

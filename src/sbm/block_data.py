@@ -25,18 +25,22 @@ class _BlockDataUpdater:
     # block memberships
     def move_node_to_block(self, node: int, block_id: int, update_sizes=True) -> None:
         # update block assignment
+        old_block = self.block_data.blocks[node] # type: ignore
+
+        if update_sizes: 
+            # update block sizes
+            self.block_data.block_sizes[block_id] += 1
+            self.block_data.block_sizes[old_block] -= 1
+
         self.block_data.blocks[node] = block_id # type: ignore
 
         # update block membersets
         if block_id not in self.block_data.block_members:
             self.block_data.block_members[block_id] = set()
-        self.block_data.block_members[block_id].add(node)
 
-        if update_sizes: 
-            old_block = self.block_data.blocks[node] # type: ignore
-            # update block sizes
-            self.block_data.block_sizes[block_id] += 1
-            self.block_data.block_sizes[old_block] -= 1
+        self.block_data.block_members[block_id].add(node)
+        self.block_data.block_members[old_block].remove(node)
+
 
     # ----- edge counts --------------------------------------------------
     def increment_edge_count(self, idx_a: int, idx_b: int, e_delta: int) -> None:

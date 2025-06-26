@@ -1,0 +1,10 @@
+numpy==1.26.4
+scipy==1.12.0
+networkx
+metis
+k-means-constrained
+nodev9ectors
+tqdm
+scikit-learn
+pyyaml
+

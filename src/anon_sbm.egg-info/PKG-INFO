@@ -1,16 +1,21 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: anon-sbm
 Version: 0.1.0
 Summary: Package for SBM with minimum group-size constraints
-Home-page: https://github.com/your-repo-url
 Author: Lasse Mohr
 Author-email: lmmi@dtu.dk
 Classifier: Programming Language :: Python :: 3
 Classifier: License :: OSI Approved :: MIT License
 Classifier: Operating System :: OS Independent
-Requires-Python: >=3.7
+Requires-Python: >=3.12.0
 Description-Content-Type: text/markdown
 Requires-Dist: numpy
 Requires-Dist: scipy
+Requires-Dist: networkx
+Requires-Dist: metis
+Requires-Dist: k-means-constrained
+Requires-Dist: nodevectors
+Requires-Dist: tqdm
+Requires-Dist: scikit-learn
 
 # anon_sbm

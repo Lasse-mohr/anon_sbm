@@ -13,6 +13,8 @@ from collections import Counter
 from typing import Tuple, Dict
 
 import numpy as np
+#np.float_ = np.float64  # ensure float64 is used
+
 import pytest
 from scipy.sparse import csr_array
 

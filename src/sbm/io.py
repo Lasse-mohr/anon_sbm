@@ -44,7 +44,10 @@ class SBMWriter:
             json.dump(fit.metadata, f)
 
     @staticmethod
-    def load(path: Path) -> SBMFit:
+    def load(path: Path, silence:bool=False) -> SBMFit:
+        if not silence:
+            print(f"Loading SBM fit from {path}")
+
         with open(path / "block_sizes.json", 'r') as sizes_file:
             block_sizes = json.load(sizes_file)
         block_sizes = [int(size) for size in block_sizes]
@@ -122,7 +125,6 @@ class GraphLoader:
         # if caller wants undirected, symmetrise the adjacency matrix
         if force_undirected:
             if is_directed:
-                print(f"GraphLoader: forcing undirected graph, symmetrising {path}.")
                 adj = adj.maximum(adj.T)
             is_directed = False
 
@@ -177,7 +179,12 @@ def _load_edgelist(path: Path) -> Tuple[csr_array, bool]:
 def _load_graphml(path: Path) -> Tuple[csr_array, bool]:
     G = nx.read_gml(path) if path.suffix == ".gml" else nx.read_graphml(path)
     directed = G.is_directed()
-    adj = nx.to_scipy_sparse_array(G, format="csr", dtype=np.int8)
+
+    # new version of networkx
+    #adj = nx.to_scipy_sparse_array(G, format="csr", dtype=np.int8)
+
+    # old version of networkx
+    adj = nx.to_scipy_sparse_matrix(G, format="csr", dtype=np.int8)
     if not directed:
         adj = adj.maximum(adj.T)
     return adj, directed
