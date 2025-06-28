@@ -13,6 +13,9 @@ datasets = [
     "data_processing.process_congress_twitter",
     "data_processing.process_email_eu",
     "data_processing.process_caltech",
+    "data_processing.process_wiki_vote",
+    "data_processing.process_enron_email",
+    "data_processing.process_lastfm_asia",
 ]
 
 if __name__ == "__main__":

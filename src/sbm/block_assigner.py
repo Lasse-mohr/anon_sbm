@@ -192,7 +192,6 @@ class BlockAssigner:
         block_mapping = {old_id: new_id for new_id, old_id in enumerate(unique_blocks)}
         return {node: block_mapping[block_id] for node, block_id in blocks.items()}
 
-
     def _compute_assignment(self) -> Dict[int, int]:
         raise NotImplementedError(
             "compute_assignment must be implemented by subclasses of BlockAssigner."
@@ -405,6 +404,7 @@ class EmbedAndConstrKMeansAssigner(BlockAssigner):
             raise ValueError("min_block_size must be specified for ProneAndConstrKMeansAssigner.")
 
         # Step 1: Embed nodes using Prone
+
         embeddings = self.embed_nodes(
             adjacency=self.graph_data.adjacency,
             n_dimensions=128  # default embedding dimension
@@ -421,19 +421,18 @@ class EmbedAndConstrKMeansAssigner(BlockAssigner):
                     size_max=self.min_block_size+1, # 
                     init='k-means++',
                     n_init=10,
-                    max_iter=300,
+                    max_iter=10,
                     tol=1e-3,
                     verbose=False,
                     random_state=self.rng.choice(2**32), 
                     copy_x=True,
-                    n_jobs=-2 # use all but one CPU core
+                    # only use a single CPU core, we run multiple workers outside of this
+                    n_jobs=-2
                 )
-        tic = time() 
+        tic = time()
         labels = kmeans.fit_predict(embeddings)
         toc = time()
-        print(f"KMeans with constraints took {toc - tic:.2f} seconds for {
-            self.graph_data.num_nodes} nodes and {embeddings.shape[1]} dimensions."
-        )
+        print(f"KMeans with constraints took {toc - tic:.2f} seconds for {self.graph_data.num_nodes} nodes.")
 
         # Create a mapping from node index to block ID
         blocks = {node: label for node, label in enumerate(labels)} # type: ignore
@@ -473,16 +472,14 @@ class ProNEAndConstrKMeansAssigner(EmbedAndConstrKMeansAssigner):
                     mu=0.2,
                     theta=0.5, 
                     exponent=0.75,
-                    verbose=True
+                    verbose=False
                 )
-        tic = time()        
+        tic = time()
         embeddings = model.fit_transform(
             sp.csr_matrix(adjacency) # nodevectors expect a CSR matrix, and not array
             )
         toc = time()
-        print(f"ProNE embedding took {toc - tic:.2f} seconds for {
-            self.graph_data.num_nodes} nodes and {n_dimensions} dimensions."
-        )
+        print(f"ProNE embedding took {toc - tic:.2f} seconds for {adjacency.shape[0]} nodes.")
 
         return embeddings
 

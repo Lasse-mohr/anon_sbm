@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------
-n_surrogates: 10 # graphs to sample per dataset
+n_surrogates: 20 # graphs to sample per dataset
 overwrite: true # set true to ignore cached results
 
 # which similarity metrics to compute

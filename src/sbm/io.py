@@ -156,6 +156,8 @@ def _load_mtx(path: Path) -> Tuple[csr_array, bool]:
 def _load_edgelist(path: Path) -> Tuple[csr_array, bool]:
     opener = gzip.open if path.suffix == ".gz" else open
     rows, cols = [], []
+    if not path.exists():
+        raise FileNotFoundError(f"GraphLoader: file {path} does not exist.")
     with opener(path, "rt") as f:
         for line in f:
             if not line.strip() or line.startswith("#"):

@@ -44,6 +44,7 @@ class SBMModel:
                 "swap": NodeSwapProposer(
                             block_data=self.block_data,
                             rng=self.rng,
+                            use_numpy=True
                         )
                 },
             rng = self.rng,
@@ -51,16 +52,17 @@ class SBMModel:
         )
 
     def fit(self,
-            num_iterations: int,
+            max_num_iterations: int,
             min_block_size: int,
             initial_temperature: float,
             cooling_rate: float,
             max_blocks: Optional[int] = None,
             logger: Optional[CSVLogger] = None,
+            patience: Optional[int] = None,
             ):
 
         self.mcmc_algorithm.fit(
-            num_iterations=num_iterations,
+            max_num_iterations=max_num_iterations,
             min_block_size=min_block_size,
             initial_temperature=initial_temperature,
             cooling_rate=cooling_rate,

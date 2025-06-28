@@ -14,32 +14,36 @@ seed: 42
 # -------------------------------------------------------------------
 sbm:
   - min_block_size: 3
-    n_iter: 10_000
+    max_n_iter: 100_000
     temperature: 1.0
     cooling_rate: 0.999
     force_undirected: true
     init_method: "ProneKMeans"
+    patience: 2000
 
-  - min_block_size: 6
-    n_iter: 10_000
-    temperature: 1.0
-    cooling_rate: 0.999
-    force_undirected: true
-    init_method: "ProneKMeans"
+#  - min_block_size: 6
+#    max_n_iter: 10_000
+#    temperature: 1.0
+#    cooling_rate: 0.999
+#    force_undirected: true
+#    init_method: "ProneKMeans"
+#    patience: 1000
 
-  - min_block_size: 12
-    n_iter: 10_000
-    temperature: 1.0
-    cooling_rate: 0.999
-    force_undirected: true
-    init_method: "ProneKMeans"
+#  - min_block_size: 12
+#    max_n_iter: 10_000
+#    temperature: 1.0
+#    cooling_rate: 0.999
+#    force_undirected: true
+#    init_method: "ProneKMeans"
+#    patience: 1000
 
-  - min_block_size: 25
-    n_iter: 10_000
-    temperature: 1.0
-    cooling_rate: 0.999
-    force_undirected: true
-    init_method: "ProneKMeans"
+#  - min_block_size: 25
+#    max_n_iter: 10_000
+#    temperature: 1.0
+#    cooling_rate: 0.999
+#    force_undirected: true
+#    init_method: "ProneKMeans"
+#    patience: 1000
 # -------------------------------------------------------------------
 #  Configuration for the logging
 #  - logging_folder: folder to save the logs
@@ -48,8 +52,8 @@ sbm:
 # -------------------------------------------------------------------
 logging:
   - logging_folder: "./logs/"
-    overwirte: true           # set true to ignore cached results
-    log_every: 100
+    overwrite: true           # set true to ignore cached results
+    log_every: 1_000
 
 # -------------------------------------------------------------------
 #  List of empirical graphs to process
@@ -58,9 +62,20 @@ logging:
 #    path : relative or absolute path to the processed graph file
 # -------------------------------------------------------------------
 datasets:
-  - name: congress_twitter
-    path: data/processed/congress_twitter.edgelist # undirected GML
-  - name: caltech_fb 
-    path: data/processed/caltech_fb.edgelist # undirected GML
-  - name: eu_email
-    path: data/processed/eu_email.edgelist # undirected GML
+# small datasets (< 1000 nodes)
+  #- name: congress_twitter
+  #  path: data/processed/congress_twitter.edgelist # undirected GML
+  #- name: caltech_fb 
+  #  path: data/processed/caltech_fb.edgelist # undirected GML
+  #- name: eu_email
+  #  path: data/processed/eu_email.edgelist # undirected GML
+
+# medium datasets (1000 - 10_000 nodes):
+  - name: lastfm_asia
+    path: data/processed/lastfm_asia.edgelist # undirected GML
+  #- name: wiki_vote
+  #  path: data/processed/wiki_vote.edgelist # undirected GML
+
+# large datasets (10_000-100_000 nodes):
+  #- name: enron_email 
+  #  path: data/processed/enron_email.edgelist # undirected GML

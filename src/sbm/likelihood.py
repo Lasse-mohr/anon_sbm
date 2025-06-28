@@ -3,6 +3,8 @@ from typing import (
     Tuple,
     Literal,
 )
+from numba import jit
+from line_profiler import profile
 import numpy as np
 from sbm.block_data import BlockData
 from sbm.block_change_proposers import (
@@ -14,13 +16,13 @@ from sbm.block_change_proposers import (
 LikelihoodType = Literal['bernoulli']
 
 # Bernoulli functions
+@jit(nopython=True, cache=True, fastmath=True)
 def _bernoulli_ll_block_pair(e: int, n: int, eps:float= 1e-6) -> float:
     """
     Profile log-likelihood for one block pair (constants dropped).
     e: number of edges between block pair.
     n: number of possible pairs between block pair.
     """
-
     if e == 0: # 0 · log 0 := 0   (limit)
         return 0.0
     elif n <= 0:
@@ -32,6 +34,8 @@ def _bernoulli_ll_block_pair(e: int, n: int, eps:float= 1e-6) -> float:
     
     return e * np.log(pos) - (n-e) * np.log(neg)
 
+@profile
+@jit(fastmath=True, cache=True)
 def _delta_ll_bernoulli_block_pair(
         e_old: int, e_new: int,
         n_old: int, n_new: int,
@@ -49,9 +53,10 @@ def _delta_ll_bernoulli_block_pair(
 
     return new_ll - old_ll
 
+@profile
 def compute_delta_ll_from_change_bernoulli(
-        delta_e: Dict[Tuple[int, int], int],
-        delta_n: Dict[Tuple[int, int], int],
+        delta_e: EdgeDelta,
+        delta_n: CombinationDelta,
         block_data: BlockData) -> float:
     """
     Incremental change in Bernoulli log-likelihood after a node-swap or move.
@@ -62,18 +67,17 @@ def compute_delta_ll_from_change_bernoulli(
 
     :return: Tuple of (change in log-likelihood, edge counts changes of move delta).
     """
-    assert set(delta_e.keys()) == set(delta_n.keys()), \
-        "Changes in edge counts and possible edge counts should be passed between identical block set."
     upper_triangle_only = not block_data.directed
 
     delta_ll = 0.0
-    for (r, s) in delta_e.keys() | delta_n.keys():
+
+    for (r, s), delta in delta_e.items():
         if upper_triangle_only and s < r:
             continue
         e_old = int(block_data.block_connectivity[r, s]) # type: ignore
         n_old = block_data.get_possible_pairs(r, s)
 
-        e_new = e_old + delta_e[r, s]
+        e_new = e_old + delta
         n_new = n_old + delta_n[r, s]
 
         delta_ll += _delta_ll_bernoulli_block_pair(
@@ -85,6 +89,7 @@ def compute_delta_ll_from_change_bernoulli(
 
     return delta_ll
 
+@profile
 def compute_global_bernoulli_ll(
         block_data: BlockData,
 ) -> float:
@@ -140,8 +145,8 @@ class LikelihoodCalculator:
             raise NotImplementedError("Only Bernoulli likelihood is implemented.")
  
     def _compute_delta_ll_from_changes(self,
-                                       delta_e: Dict[Tuple[int, int], int],
-                                       delta_n: Dict[Tuple[int, int], int],
+                                       delta_e: EdgeDelta,
+                                       delta_n: CombinationDelta,
     ) ->float:
         """
         efficeintly compute the change in log-likelihood from changes in edge counts and possible pairs.

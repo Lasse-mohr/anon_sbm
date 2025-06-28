@@ -1,6 +1,9 @@
 from typing import Optional, Tuple, Dict
 import numpy as np
 
+from line_profiler import profile
+from numba import jit
+
 #from src.sbm.graph_data import GraphData
 from sbm.block_data import BlockData
 from sbm.likelihood import LikelihoodCalculator
@@ -36,18 +39,20 @@ class MCMCAlgorithm:
         self._best_block_conn = block_data.block_connectivity.copy()
         self.best_ll = self.likelihood_calculator.ll
 
+    @profile
     def fit(self,
-            num_iterations: int,
+            max_num_iterations: int,
             initial_temperature: float = 1,
             cooling_rate: float = 0.99,
             min_block_size: Optional[int] = None,
             max_blocks: Optional[int] = None,
             logger: Optional[CSVLogger] = None,    
+            patience: Optional[int] = None
         ) -> None:
         """
         Run the adaptive MCMC algorithm to fit the SBM to the network data.
 
-        :param num_iterations: Total number of MCMC iterations to run.
+        :param max_num_iterations: max number of MCMC iterations to run.
         :param min_block_size: Minimum allowed size for any block.
         :param initial_temperature: Starting temperature for simulated annealing.
         :param cooling_rate: Rate at which temperature decreases.
@@ -55,13 +60,14 @@ class MCMCAlgorithm:
         :param max_blocks: Optional maximum number of blocks allowed.
         """
         temperature = initial_temperature
-        current_ll = self.likelihood_calculator.compute_likelihood()
+        current_ll = self.likelihood_calculator.ll
         acceptance_rate = 0 # acceptance rate of moves between logging
 
         if logger:
             logger.log(0, current_ll, acceptance_rate, temperature)
 
-        for iteration in range(1, num_iterations + 1):
+        n_steps_declined = 0
+        for iteration in range(1, max_num_iterations + 1):
             move_type = self._select_move_type()
 
             delta_ll, move_accepted = self._attempt_move(
@@ -81,15 +87,20 @@ class MCMCAlgorithm:
                     self.best_ll = current_ll
                     self._best_block_assignment = self.block_data.blocks.copy()
                     self._best_block_conn = self.block_data.block_connectivity.copy()
-
-            # Update temperature
+            else:
+                n_steps_declined += 1
+            
             temperature = self._update_temperature(temperature, cooling_rate)
 
-            # Log and adjust proposal probabilities every 100 iterations
             if logger and iteration % logger.log_every == 0:
                 acceptance_rate = acceptance_rate / logger.log_every
                 logger.log(iteration, self.current_ll, acceptance_rate, temperature)
                 acceptance_rate = 0
+            
+            if patience is not None and n_steps_declined >= patience:
+                print(f"Stopping early after {iteration} iterations due to patience limit.")
+                break
+            
 
     def _select_move_type(self) -> str:
         """
@@ -100,6 +111,7 @@ class MCMCAlgorithm:
         move_type = 'swap'
         return move_type
 
+    @profile
     def _attempt_move(self,
                       move_type: str,
                       temperature: float,
