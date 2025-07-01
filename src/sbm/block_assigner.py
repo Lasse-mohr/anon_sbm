@@ -55,6 +55,7 @@ def _movable_vertex(src: int, dst_set: Set[int], *, rng: np.random.Generator,
 
         if neigh_blks:
             return v, rng.choice(list(neigh_blks))
+
     return None
 
 
@@ -184,7 +185,6 @@ def balance_k_plus_1_blocks(
     with size k by moving a vertex from a block with size larger than k+1
     or smaller than k+1
     """
-
     if len(over1) == r_target:
         # already balanced, nothing to do
         return
@@ -313,45 +313,62 @@ def _rebalance_to_min_size(
             continue
 
     # ---------------- final safety pass: remove any undersized ---------------
-    over_blocks = [b for b, s in sizes.items() if s > k]
+    # we first attempt to move nodes from oversize blocks to undersize blocks
+    # if that fails, we move nodes from remaining undersized blocks to any block
     under_blocks = [b for b, s in sizes.items() if s < k]
-    for b_dst in under_blocks:
-        while sizes[b_dst] < k and len(over_blocks) > 0:
-            b_src = over_blocks[-1]  # take from the end for efficiency
-            if sizes[b_src] == k: # have we taken all we can?
-                over_blocks.pop() # discount this block from further consideration
-                continue
+    if len(under_blocks) == 0:
+        return blocks
 
-            # move arbitrary boundary or any vertex as last resort
-            mv = _movable_vertex(b_src, {b_dst}, rng=rng, blocks=blocks,
-                                  members=members, indptr=indptr, indices=indices)
-            if mv is None:
-                v = rng.choice(tuple(members[b_src]))
-            else:
-                v, _ = mv
-            _move(v, b_src, b_dst, blocks=blocks, members=members, sizes=sizes)
+    rng.shuffle(under_blocks)
+    over_blocks = [b for b, s in sizes.items() if s > k]
 
-        # if there are no over_blocks left, spread nodes from under_block randomly among other blocks
-        if len(over_blocks) == 0:
-            # assign all nodes in under_block to a random block
-            # we are changing the direction of movement, so destination becomes source
-            b_src = b_dst
-            for v in members[b_dst]:
-                non_under_blocks = {b for b, s in sizes.items() if s >= k}
+    if len(over_blocks) > 0:
+        # attempt to move nodes from oversize blocks to undersize blocks
+        while len(over_blocks) > 0 and len(under_blocks) > 0:
+            b_dst = under_blocks[-1]
 
-                # check if v touches a non_under block
+            while sizes[b_dst] < k and len(over_blocks) > 0:
+                b_src = over_blocks[-1]  # take from the end for efficiency
 
-                mv = _movable_vertex(v, non_under_blocks, rng=rng, blocks=blocks,
-                                        members=members, indptr=indptr, indices=indices)
-                if mv is not None:
-                    v, b_dst = mv
+                if sizes[b_src] == k: # have we taken all we can?
+                    over_blocks.pop() # discount this block from further consideration
+                    continue
+
+                # can we find a vertex in b_src connected to b_dst?
+                mv = _movable_vertex(b_src, {b_dst}, rng=rng, blocks=blocks,
+                                      members=members, indptr=indptr, indices=indices)
+
+                if mv is None:
+                    # if not, pick a random vertex in b_src
+                    v = rng.choice(tuple(members[b_src]))
                 else:
-                    b_dst= rng.choice(tuple(blocks.values()))
+                    v, _ = mv
+
                 _move(v, b_src, b_dst, blocks=blocks, members=members, sizes=sizes)
-            # we should have no members left in the given block, and it should be removed
-            assert len(members[b_src]) == 0, \
-                "Rebalance failed: block {b_src} still has members after rebalancing."
-            del sizes[b_dst]
+                over_blocks = {b for b, s in sizes.items() if s > k}
+            
+            if sizes[b_dst] >= k:
+                # we have filled the under block, remove it from consideration
+                under_blocks.pop()
+
+    # assign all nodes in under_block to a random block
+    while len(under_blocks) > 0:
+        b_src = under_blocks[-1]  # take from the end for efficiency
+
+        while len(members[b_src]) > 0:
+            non_under_blocks = {b for b, s in sizes.items() if s >= k}
+
+            # check if v touches a non_under block
+            mv = _movable_vertex(b_src, non_under_blocks, rng=rng, blocks=blocks,
+                                    members=members, indptr=indptr, indices=indices)
+            if mv is not None:
+                v, b_dst = mv
+            else:
+                v = rng.choice(tuple(members[b_src]))
+                b_dst= rng.choice(tuple(blocks.values()))
+
+            _move(v, b_src, b_dst, blocks=blocks, members=members, sizes=sizes)
+        under_blocks.pop()
 
     # final check
     _, _, under = categorize(sizes=sizes, k=k)
@@ -567,13 +584,13 @@ class MetisBlockAssigner(BlockAssigner):
             raise ValueError("min_block_size must be specified for MetisBlockAssigner.")
 
         assignment = self._compute_metis_assignment()
-        assignment = _rebalance_to_min_size(
-            blocks=assignment,
-            adjacency=self.graph_data.adjacency,
-            k=self.min_block_size,
-            rng=self.rng,
-            max_iter=None,  # data-driven max_iter (10*num_nodes)
-        )
+        #assignment = _rebalance_to_min_size(
+        #    blocks=assignment,
+        #    adjacency=self.graph_data.adjacency,
+        #    k=self.min_block_size,
+        #    rng=self.rng,
+        #    max_iter=None,  # data-driven max_iter (10*num_nodes)
+        #)
         assignment = self.reindex_blocks(assignment)
 
         return BlockData(
@@ -655,7 +672,6 @@ class RefinedMetisBlockAssigner(MetisBlockAssigner):
                     boundary.update(indices[row])
 
         sub_nodes = sorted(boundary)
-        idx_of: Dict[int, int] = {v: i for i, v in enumerate(sub_nodes)}
         sub_adj = adj[sub_nodes][:, sub_nodes]  # type: ignore[index]
         # blocks involved
         blks_sub = {blocks[v] for v in sub_nodes}

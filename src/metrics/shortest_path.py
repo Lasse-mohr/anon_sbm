@@ -22,7 +22,8 @@ Number = Union[int, float]
 def all_unique_shortest_distances(
     G: nx.Graph,
     weight: str | None = None,
-    cutoff: Number | None = None
+    cutoff: Number | None = None,
+    directed: bool = False,
 ) -> List[Number]:
     """
     Return a list containing the length of every unique shortest path in *G*.
@@ -95,7 +96,7 @@ def shortest_path_distance(
     sur_adj = restrict_to_lcc(sur_adj, directed=False)
 
     emp_graph_size = emp_adj.shape[0] # type: ignore
-    sur_graph_size = emp_adj.shape[0] # type: ignore
+    sur_graph_size = sur_adj.shape[0] # type: ignore
 
     if n_samples is None:
         # Use all pairs if n_samples is None, generated using networkx (returns iterator)
@@ -133,7 +134,17 @@ def shortest_path_distance(
 
         def sample_shortest_paths(adj, pairs):
             G = nx.from_scipy_sparse_matrix(adj)
-            return np.array([nx.shortest_path_length(G, source=u, target=v) for u, v in pairs])
+            path_lengths = []
+            for pair in pairs:
+                try:
+                    length = nx.shortest_path_length(G, source=pair[0], target=pair[1])
+                    path_lengths.append(length)
+                except nx.exception.NodeNotFound:
+                    raise Warning(
+                        f"Node {pair[0]} or {pair[1]} not found in the graph."
+                    )
+
+            return path_lengths
 
         x = sample_shortest_paths(emp_adj, emp_pairs)
         y = sample_shortest_paths(sur_adj, sur_pairs)
