@@ -19,7 +19,6 @@ class NodeMover:
     def __init__(self, block_data: BlockData):
         self.block_data_updater = _BlockDataUpdater(block_data)
 
-    @profile
     def perform_change(self,
             proposed_changes: ProposedValidChanges,
             delta_e: EdgeDelta,

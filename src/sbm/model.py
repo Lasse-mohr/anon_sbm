@@ -7,7 +7,11 @@ from sbm.likelihood import (
     LikelihoodCalculator,
     LikelihoodType,
 )
-from sbm.block_change_proposers import NodeSwapProposer
+from sbm.block_change_proposers import (
+    NodeSwapProposer,
+    EdgeBasedSwapProposer,
+    ChangeProposerName,
+)
 from sbm.node_mover import NodeMover
 from sbm.mcmc import MCMCAlgorithm
 
@@ -19,7 +23,10 @@ class SBMModel:
                 initial_blocks: BlockData,
                 rng: np.random.Generator,
                 likelihood_type: LikelihoodType = "bernoulli",
-                log: bool = True
+                log: bool = True,
+                change_freq = { # probabilities of trying each move type
+                    "uniform_swap": 1.0,
+                }
         ):
 
         self._best_block_assignment = None
@@ -37,38 +44,55 @@ class SBMModel:
             block_data=self.block_data,
             )
 
+        change_proposer = {
+            "uniform_swap": NodeSwapProposer(
+                        block_data=self.block_data,
+                        rng=self.rng,
+                        use_numpy=True,
+                    ),
+            "edge_based_swap": EdgeBasedSwapProposer(
+                        block_data=self.block_data,
+                        rng=self.rng,
+                        use_numpy=False,
+                    ),
+            "triadic_swap": EdgeBasedSwapProposer(
+                        block_data=self.block_data,
+                        rng=self.rng,
+                        use_numpy=True,
+                    ),
+        }
         self.mcmc_algorithm = MCMCAlgorithm(
             block_data = self.block_data,
             likelihood_calculator = self.likelihood_calculator,
-            change_proposer = {
-                "swap": NodeSwapProposer(
-                            block_data=self.block_data,
-                            rng=self.rng,
-                            use_numpy=True
-                        )
-                },
+            change_proposer = change_proposer, # type: ignore
+            change_freq = change_freq, # type: ignore
             rng = self.rng,
             log=log
         )
 
     def fit(self,
-            max_num_iterations: int,
-            min_block_size: int,
-            initial_temperature: float,
-            cooling_rate: float,
-            max_blocks: Optional[int] = None,
-            logger: Optional[CSVLogger] = None,
-            patience: Optional[int] = None,
-            ):
+        min_block_size: int,
+        cooling_rate: float,
+        max_blocks: Optional[int] = None,
+        logger: Optional[CSVLogger] = None,
+        patience: Optional[int] = None,
+        return_nll: bool = False,
+        max_num_iterations: int=int(10**6),
+        initial_temperature: float=1.0,
+        ):
 
-        self.mcmc_algorithm.fit(
+        nll = self.mcmc_algorithm.fit(
             max_num_iterations=max_num_iterations,
             min_block_size=min_block_size,
             initial_temperature=initial_temperature,
             cooling_rate=cooling_rate,
             max_blocks=max_blocks,
             logger=logger,
+            patience=patience,
         )
+
+        if return_nll:
+            return nll
 
     def get_block_assignments(self, best:bool=True) -> Dict[int, int]:
         if best:
@@ -87,17 +111,17 @@ class SBMModel:
             blocks = self.mcmc_algorithm._best_block_assignment
             block_sizes = np.unique(list(blocks.values()), return_counts=True)[1].tolist()
             block_conn = self.mcmc_algorithm._best_block_conn
-            ll = self.mcmc_algorithm.best_ll
+            nll = self.mcmc_algorithm.best_nll
         else:
             blocks = self.block_data.blocks
             block_sizes = list(self.block_data.block_sizes.values())
             block_conn = self.block_data.block_connectivity
-            ll = self.mcmc_algorithm.current_ll
+            nll = self.mcmc_algorithm.current_nll
 
         return SBMFit(
             block_sizes=block_sizes,
             block_conn=csr_array(block_conn),
             directed_graph=self.block_data.graph_data.directed,
-            neg_loglike=ll,
+            neg_loglike=nll,
             metadata=metadata
         )

@@ -1,7 +1,6 @@
 from typing import Dict, Set, Optional
 
 from dataclasses import dataclass
-from line_profiler import profile
 
 import numpy as np
 import scipy.sparse as sp
@@ -24,7 +23,6 @@ class _BlockDataUpdater:
         self.block_data = block_data # B × B integer matrix
     
     # block memberships
-    @profile
     def _move_node_to_block(self, node: int, block_id: int, update_sizes=True) -> None:
         # update block assignment
         old_block = self.block_data.blocks[node] # type: ignore
@@ -45,7 +43,6 @@ class _BlockDataUpdater:
 
 
     # ----- edge counts --------------------------------------------------
-    @profile
     def _increment_edge_count(self, idx_a: int, idx_b: int, e_delta: int) -> None:
         """ 
         Increment the edge count between two blocks.
@@ -99,7 +96,6 @@ class BlockData:
         # Recompute block connectivity based on the new graph data
         self.block_connectivity = self._compute_block_connectivity()
         
-    @profile 
     def increment_edge_count(self, block_a: int, block_b: int, e_delta: int) -> None:
         """ 
         Increment the edge count between two blocks.
@@ -111,13 +107,10 @@ class BlockData:
         idx_b = self.block_indices[block_b]
         self.block_updater._increment_edge_count(idx_a, idx_b, e_delta)
     
-    @profile 
     def get_possible_pairs(self, block_a: int, block_b:int ) -> int:
         """ 
         Compute the possible number of edges between two blocks.
         """
-        #block_a = self.inverse_block_indices[block_idx_a]
-        #block_b = self.inverse_block_indices[block_idx_b]
 
         if block_a == block_b:
             # If the same block, return the number of pairs within the block

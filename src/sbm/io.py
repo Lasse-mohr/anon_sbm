@@ -65,7 +65,7 @@ class SBMWriter:
         return SBMFit(
             #blocks=blocks,
             block_sizes=block_sizes,
-            block_conn=block_conn,
+            block_conn=csr_array(block_conn),
             directed_graph=directed_graph,
             neg_loglike=neg_loglike,
             metadata=metadata

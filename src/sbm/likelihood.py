@@ -4,7 +4,8 @@ from typing import (
     Literal,
 )
 from numba import jit
-from line_profiler import profile
+from scipy.sparse import coo_array
+
 import numpy as np
 from sbm.block_data import BlockData
 from sbm.block_change_proposers import (
@@ -34,7 +35,6 @@ def _bernoulli_ll_block_pair(e: int, n: int, eps:float= 1e-6) -> float:
     
     return e * np.log(pos) - (n-e) * np.log(neg)
 
-@profile
 @jit(fastmath=True, cache=True)
 def _delta_ll_bernoulli_block_pair(
         e_old: int, e_new: int,
@@ -53,7 +53,6 @@ def _delta_ll_bernoulli_block_pair(
 
     return new_ll - old_ll
 
-@profile
 def compute_delta_ll_from_change_bernoulli(
         delta_e: EdgeDelta,
         delta_n: CombinationDelta,
@@ -89,7 +88,62 @@ def compute_delta_ll_from_change_bernoulli(
 
     return delta_ll
 
-@profile
+# ────────────────────────────────────────────────────────────────────
+### Helpter function to vectorise the LL global computation
+# ────────────────────────────────────────────────────────────────────
+@jit(nopython=True, cache=True, fastmath=True)   # remove decorator if you dislike Numba
+def _ll_vec(edges: np.ndarray, pairs: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """
+    edges  : e_rs   (int ≥ 0)
+    pairs  : n_rs   (int ≥ 1)
+    returns: ℓ_rs   (float)
+    """
+    p = edges / pairs
+    p = np.where(p < eps, eps, p)
+    p = np.where(p > 1.0 - eps, 1.0 - eps, p)
+    return edges * np.log(p) - (pairs - edges) * np.log1p(-p)
+
+def compute_global_bernoulli_ll_fast(block_data:BlockData) -> float:
+    """
+    Computes the global log-likelihood of the SBM using Bernoulli likelihood.
+    Same semantics as the original `compute_global_bernoulli_ll`, but
+    **O(nnz)** instead of O(B²).
+
+    The trick: only block pairs with at least one edge (e_rs > 0) can
+    change the profiled Bernoulli LL once the constants are dropped.
+    """
+    conn: coo_array = coo_array(block_data.block_connectivity)
+    rows, cols, e = conn.row, conn.col, conn.data.astype(np.int64)
+
+    # Undirected graphs: keep only upper-triangle to avoid double count
+    if not block_data.directed:
+        keep = rows <= cols
+        rows, cols, e = rows[keep], cols[keep], e[keep]
+
+    # Block sizes in matrix-index order
+    sizes = np.fromiter(
+        (block_data.block_sizes[block_data.inverse_block_indices[i]]
+         for i in range(len(block_data.block_sizes))),
+        dtype=np.int64,
+        count=len(block_data.block_sizes)
+    )
+
+    # Possible pair counts n_rs (vectorised)
+    n = np.where(
+        rows == cols,
+        sizes[rows] * (sizes[rows] - 1) // 2,   # diagonal blocks
+        sizes[rows] * sizes[cols]               # off-diagonal
+    )
+
+    # Safety: skip singleton blocks (n = 0) to avoid /0 in n==1 corner
+    valid = n > 0
+    if not valid.all():
+        rows, cols, e, n = rows[valid], cols[valid], e[valid], n[valid]
+
+    # Vectorised LL and reduction
+    return float(_ll_vec(e, n).sum())
+
+
 def compute_global_bernoulli_ll(
         block_data: BlockData,
 ) -> float:
@@ -111,7 +165,15 @@ def compute_global_bernoulli_ll(
 
         for s in range(r if upper_triangle_only else 0, len(block_data.block_sizes)):
             e = block_data.block_connectivity[r, s]
-            n = block_data.get_possible_pairs(r, s)
+            #n = block_data.get_possible_pairs(r, s)
+            if r == s:
+                # If the same block, return the number of pairs within the block
+                n = block_data.block_sizes[r] * (block_data.block_sizes[r] - 1) // 2
+
+            # If different blocks, return the product of their sizes
+            else:
+                n = block_data.block_sizes[r] * block_data.block_sizes[s]
+
 
             if e < 0 or n < 0:
                 raise ValueError(f"Invalid edge count {e} or possible pairs {n} for block pair ({r}, {s}).")
@@ -131,20 +193,20 @@ class LikelihoodCalculator:
         self.block_data = block_data
 
         self.likelihood_type: LikelihoodType = 'bernoulli'
-        self.ll = self.compute_likelihood()
+        self.nll = self.compute_nll()
 
-    def compute_likelihood(self) -> float:
+    def compute_nll(self) -> float:
         """
-        Compute the likelihood of the network given the current partition.
+        Compute the negative likelihood of the network given the current partition.
 
-        :return: The log-likelihood of the SBM.
+        :return: The negative log-likelihood of the SBM.
         """
         if self.likelihood_type.lower() == 'bernoulli':
-            return compute_global_bernoulli_ll(block_data=self.block_data)
+            return -compute_global_bernoulli_ll_fast(block_data=self.block_data)
         else:
             raise NotImplementedError("Only Bernoulli likelihood is implemented.")
  
-    def _compute_delta_ll_from_changes(self,
+    def _compute_delta_nll_from_changes(self,
                                        delta_e: EdgeDelta,
                                        delta_n: CombinationDelta,
     ) ->float:
@@ -157,7 +219,7 @@ class LikelihoodCalculator:
         :return: The change in log-likelihood.
         """
         if self.likelihood_type.lower() == 'bernoulli':
-            return compute_delta_ll_from_change_bernoulli(
+            return -compute_delta_ll_from_change_bernoulli(
                 delta_e=delta_e,
                 delta_n=delta_n,
                 block_data=self.block_data
@@ -165,7 +227,7 @@ class LikelihoodCalculator:
         else:
             raise NotImplementedError("Only Bernoulli likelihood is implemented.")
 
-    def compute_delta_ll(self,
+    def compute_delta_nll(self,
                         delta_e: EdgeDelta,
                         delta_n: CombinationDelta,
         ) -> float:
@@ -175,7 +237,7 @@ class LikelihoodCalculator:
         :param proposed_moves: A list of tuples (node_i, node_j) representing the nodes to swap.
         :return: The change in log-likelihood.
         """
-        return self._compute_delta_ll_from_changes(
+        return self._compute_delta_nll_from_changes(
             delta_e=delta_e,
             delta_n=delta_n
             )

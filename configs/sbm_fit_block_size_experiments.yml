@@ -14,36 +14,28 @@ seed: 42
 # -------------------------------------------------------------------
 sbm:
   - min_block_size: 3
-    max_n_iter: 100_000
-    temperature: 1.0
-    cooling_rate: 0.999
+    cooling_rate: 0.9999
     force_undirected: true
-    init_method: "ProneKMeans"
-    patience: 2000
+    init_method: "metis"
+    patience: 1000
 
-#  - min_block_size: 6
-#    max_n_iter: 10_000
-#    temperature: 1.0
-#    cooling_rate: 0.999
-#    force_undirected: true
-#    init_method: "ProneKMeans"
-#    patience: 1000
+  - min_block_size: 6
+    cooling_rate: 0.9999
+    force_undirected: true
+    init_method: "metis"
+    patience: 1000
 
-#  - min_block_size: 12
-#    max_n_iter: 10_000
-#    temperature: 1.0
-#    cooling_rate: 0.999
-#    force_undirected: true
-#    init_method: "ProneKMeans"
-#    patience: 1000
+  - min_block_size: 12
+    cooling_rate: 0.9999
+    force_undirected: true
+    init_method: "metis"
+    patience: 1000
 
-#  - min_block_size: 25
-#    max_n_iter: 10_000
-#    temperature: 1.0
-#    cooling_rate: 0.999
-#    force_undirected: true
-#    init_method: "ProneKMeans"
-#    patience: 1000
+  - min_block_size: 25
+    cooling_rate: 0.9999
+    force_undirected: true
+    init_method: "metis"
+    patience: 1000
 # -------------------------------------------------------------------
 #  Configuration for the logging
 #  - logging_folder: folder to save the logs
@@ -63,16 +55,16 @@ logging:
 # -------------------------------------------------------------------
 datasets:
 # small datasets (< 1000 nodes)
-  #- name: congress_twitter
-  #  path: data/processed/congress_twitter.edgelist # undirected GML
-  #- name: caltech_fb 
-  #  path: data/processed/caltech_fb.edgelist # undirected GML
-  #- name: eu_email
-  #  path: data/processed/eu_email.edgelist # undirected GML
+  - name: congress_twitter
+    path: data/processed/congress_twitter.edgelist # undirected GML
+  - name: caltech_fb 
+    path: data/processed/caltech_fb.edgelist # undirected GML
+  - name: eu_email
+    path: data/processed/eu_email.edgelist # undirected GML
 
 # medium datasets (1000 - 10_000 nodes):
-  - name: lastfm_asia
-    path: data/processed/lastfm_asia.edgelist # undirected GML
+  #- name: lastfm_asia
+  #  path: data/processed/lastfm_asia.edgelist # undirected GML
   #- name: wiki_vote
   #  path: data/processed/wiki_vote.edgelist # undirected GML
 

@@ -1,7 +1,7 @@
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Optional, List
 import numpy as np
 
-from line_profiler import profile
+#from line_profiler import profile
 from numba import jit
 
 #from src.sbm.graph_data import GraphData
@@ -15,6 +15,7 @@ from sbm.block_change_proposers import ChangeProposer, ChangeProposerName
 
 #### Aliases
 ChangeProposerDict = Dict[ChangeProposerName, ChangeProposer] 
+ChangeFreqDict = Dict[ChangeProposerName, float]
 
 class MCMCAlgorithm:
     def __init__(self,
@@ -22,33 +23,33 @@ class MCMCAlgorithm:
                  likelihood_calculator: LikelihoodCalculator,
                  change_proposer: ChangeProposerDict,
                  rng: np.random.Generator,
-                 log: bool = True
+                 log: bool = True,
+                 change_freq: Optional[ChangeFreqDict] = None,
                  ):
-        self.move_probabilities = { "swap": 1 }
 
         self.block_data = block_data
         self.likelihood_calculator = likelihood_calculator
         self.change_proposers = change_proposer
+        self.change_freq = change_freq
         self.node_mover = NodeMover(block_data=block_data)
         self.rng = rng
-        self.current_ll = self.likelihood_calculator.ll
+        self.current_nll = self.likelihood_calculator.nll
         self.log = log # True if logging is enabled, False otherwise.
 
         # store the best block assignment and likelihood
         self._best_block_assignment = block_data.blocks.copy()
         self._best_block_conn = block_data.block_connectivity.copy()
-        self.best_ll = self.likelihood_calculator.ll
+        self.best_nll = self.likelihood_calculator.nll
 
-    @profile
     def fit(self,
             max_num_iterations: int,
             initial_temperature: float = 1,
             cooling_rate: float = 0.99,
             min_block_size: Optional[int] = None,
             max_blocks: Optional[int] = None,
-            logger: Optional[CSVLogger] = None,    
-            patience: Optional[int] = None
-        ) -> None:
+            logger: Optional[CSVLogger] = None,
+            patience: Optional[int] = 10_000
+        ) -> List[float]:
         """
         Run the adaptive MCMC algorithm to fit the SBM to the network data.
 
@@ -60,17 +61,18 @@ class MCMCAlgorithm:
         :param max_blocks: Optional maximum number of blocks allowed.
         """
         temperature = initial_temperature
-        current_ll = self.likelihood_calculator.ll
+        current_nll = self.likelihood_calculator.nll
         acceptance_rate = 0 # acceptance rate of moves between logging
+        nll_list = [current_nll]
 
         if logger:
-            logger.log(0, current_ll, acceptance_rate, temperature)
+            logger.log(0, current_nll, acceptance_rate, temperature)
 
         n_steps_declined = 0
         for iteration in range(1, max_num_iterations + 1):
             move_type = self._select_move_type()
 
-            delta_ll, move_accepted = self._attempt_move(
+            delta_nll, move_accepted = self._attempt_move(
                 move_type=move_type,
                 min_block_size=min_block_size,
                 temperature=temperature,
@@ -79,41 +81,52 @@ class MCMCAlgorithm:
 
             # update likelihood and best assignment so far
             if move_accepted :
-                self.current_ll += delta_ll
+                self.current_nll += delta_nll
+                n_steps_declined = 0
                 if logger:
                     acceptance_rate += 1
 
-                if self.current_ll < self.best_ll:
-                    self.best_ll = current_ll
+                if self.current_nll < self.best_nll:
+                    self.best_nll = current_nll
                     self._best_block_assignment = self.block_data.blocks.copy()
                     self._best_block_conn = self.block_data.block_connectivity.copy()
             else:
                 n_steps_declined += 1
             
+            nll_list.append(self.current_nll)
+
             temperature = self._update_temperature(temperature, cooling_rate)
 
             if logger and iteration % logger.log_every == 0:
                 acceptance_rate = acceptance_rate / logger.log_every
-                logger.log(iteration, self.current_ll, acceptance_rate, temperature)
+                logger.log(iteration, self.current_nll, acceptance_rate, temperature)
                 acceptance_rate = 0
             
             if patience is not None and n_steps_declined >= patience:
                 print(f"Stopping early after {iteration} iterations due to patience limit.")
                 break
-            
 
-    def _select_move_type(self) -> str:
+        return nll_list 
+
+    def _select_move_type(self) -> ChangeProposerName:
         """
         Select a move type based on the current proposal probabilities.
 
         :return: The selected move type.
         """
-        move_type = 'swap'
-        return move_type
+        if self.change_freq is None:
+            return "uniform_swap"
+        else:
+            # Select a move type based on the defined probabilities
+            move_type = self.rng.choice(
+                tuple(self.change_freq.keys()),
+                p=tuple(self.change_freq.values())
+            )
+        
+        return move_type # type: ignore
 
-    @profile
     def _attempt_move(self,
-                      move_type: str,
+                      move_type: ChangeProposerName,
                       temperature: float,
                       max_blocks: Optional[int] = None,
                       min_block_size: Optional[int] = None,
@@ -125,42 +138,38 @@ class MCMCAlgorithm:
         :param min_block_size: Minimum allowed size for any block.
         :param temperature: Current temperature for simulated annealing.
         :param max_blocks: Optional maximum number of blocks allowed.
-        :return: Tuple of (delta_ll, move_accepted)
+        :return: Tuple of (delta_nll, move_accepted)
         """
-        delta_ll, move_accepted = 0.0, False
+        delta_nll, move_accepted = 0.0, False
 
-        if move_type == 'swap':
-            # Propose a swap of two nodes
-            proposed_change, proposed_delta_e, proposed_delta_n = \
-                self.change_proposers['swap'].propose_change()
+        proposed_change, proposed_delta_e, proposed_delta_n = \
+            self.change_proposers[move_type].propose_change()
 
-            # Compute change in log-likelihood and accept/reject move
-            delta_ll = self.likelihood_calculator.compute_delta_ll(
-                delta_e=proposed_delta_e,
-                delta_n=proposed_delta_n
-                )
+        # Compute change in log-likelihood and accept/reject move
+        delta_nll = self.likelihood_calculator.compute_delta_nll(
+            delta_e=proposed_delta_e,
+            delta_n=proposed_delta_n
+            )
 
-            move_accepted = self._accept_move(delta_ll, temperature)
-            if move_accepted:
-                self.node_mover.perform_change(proposed_change, proposed_delta_e)
-        else:
-            raise ValueError(f"Invalid move type: {move_type}. Only 'swap' is currently supported.")
-        
-        return delta_ll, move_accepted
+        move_accepted = self._accept_move(delta_nll, temperature)
+        if move_accepted:
+            self.node_mover.perform_change(proposed_change, proposed_delta_e)
+    
+        return delta_nll, move_accepted
 
-    def _accept_move(self, delta_ll: float, temperature: float, eps:float=1e-6) -> bool:
+    def _accept_move(self, delta_nll: float, temperature: float, eps:float=1e-6) -> bool:
         """
         Determine whether to accept a proposed move based on likelihood change and temperature.
 
-        :param delta_ll: Change in log-likelihood resulting from the proposed move.
+        :param delta_nll: Change in negative log-likelihood resulting from the proposed move.
         :param temperature: Current temperature for simulated annealing.
         :return: True if move is accepted, False otherwise.
         """
-        if delta_ll < 0:
+        if delta_nll < 0:
             return True
 
         temperature = max(temperature, eps)  # Avoid division by zero
-        z = min(delta_ll / temperature, 700) # clip to avoid overflow in exp
+        z = min(delta_nll / temperature, 700) # clip to avoid overflow in exp
 
         return self.rng.uniform() > np.exp(z)
 

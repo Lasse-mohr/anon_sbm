@@ -28,6 +28,8 @@ from sbm.block_data import BlockData
 from sbm.block_change_proposers import (
     NodeSwapProposer,
     ProposedValidChanges,
+    EdgeBasedSwapProposer,
+    TriadicSwapProposer,
 )
 from sbm.edge_delta import EdgeDelta
 from sbm.node_mover import NodeMover
@@ -178,3 +180,126 @@ def test_node_mover_updates_connectivity() -> None:
            f"\nobserved  connectivity {after_matrix}"
            f"\ndelta_e applied        {delta_e}")
     assert after_matrix == after_brute, msg
+
+
+# ---------------------------------------------------------------------------
+# helpers – minimal block‑edge accounting for validation
+# ---------------------------------------------------------------------------
+
+def _block_edge_matrix(adj: csr_array, blocks: np.ndarray, n_blocks: int) -> np.ndarray:
+    """Return an n_blocks×n_blocks symmetric matrix with edge counts."""
+    mat = np.zeros((n_blocks, n_blocks), dtype=int)
+    rows, cols = adj.nonzero()
+    for u, v in zip(rows, cols):
+        if u >= v:  # undirected ⇒ count each unordered pair once
+            continue
+        bu, bv = blocks[u], blocks[v]
+        mat[bu, bv] += 1
+        if bu != bv:
+            mat[bv, bu] += 1
+    return mat
+
+
+def _apply_changes(blocks: np.ndarray, changes):
+    new_blocks = blocks.copy()
+    for node, tgt in changes:
+        new_blocks[node] = tgt
+    return new_blocks
+
+
+def _assert_delta_matches(delta_e, before, after):
+    """Check that EdgeDelta equals after–before for every block pair."""
+    n_blocks = before.shape[0]
+    for r in range(n_blocks):
+        for s in range(n_blocks):
+            assert delta_e[r, s] == after[r, s] - before[r, s]
+
+# ---------------------------------------------------------------------------
+# fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def toy_block_data():
+    """Simple 6‑node, 2‑block undirected graph with both intra‑ and cross‑edges."""
+    edges = [
+        (0, 1), (1, 2), (0, 2),  # block 0 internal triangle
+        (3, 4), (4, 5), (3, 5),  # block 1 internal triangle
+        (0, 3), (1, 4), (2, 5),  # three cross edges
+    ]
+    n = 6
+    rows, cols = [], []
+    for u, v in edges:
+        rows += [u, v]
+        cols += [v, u]
+    data = np.ones(len(rows), dtype=int)
+    adj = csr_array((data, (rows, cols)), shape=(n, n))
+
+    blocks = {0: 0, 1: 0, 2: 0, 3: 1, 4: 1, 5: 1}  # type: ignore[assignment]
+    bd = BlockData(initial_blocks=blocks, graph_data=GraphData(adj, directed=False))
+    return bd
+
+# ---------------------------------------------------------------------------
+# tests – EdgeBasedSwapProposer
+# ---------------------------------------------------------------------------
+
+def test_edge_based_swap_valid_move(toy_block_data):
+    rng = np.random.default_rng(42)
+    prop = EdgeBasedSwapProposer(toy_block_data, rng=rng)
+    changes, delta_e, _ = prop.propose_change()
+
+    # exactly two tuples returned
+    assert len(changes) == 2
+
+    (i, tgt_i), (j, tgt_j) = changes
+    blocks = toy_block_data.blocks
+
+    # originally different blocks and connected by an edge
+    assert blocks[i] != blocks[j]
+    assert toy_block_data.graph_data.adjacency[i, j] == 1  # type: ignore[index]
+
+    # swap  semantics: targets are the partner's old blocks
+    assert tgt_i == blocks[j]
+    assert tgt_j == blocks[i]
+
+    # edge‑delta correctness --------------------------------------------------
+    before = _block_edge_matrix(toy_block_data.graph_data.adjacency, blocks,  # type: ignore[attr-defined]
+                                n_blocks=2)
+    after_blocks = _apply_changes(blocks, changes)
+    after = _block_edge_matrix(toy_block_data.graph_data.adjacency, after_blocks, 2)
+    _assert_delta_matches(delta_e, before, after)
+
+# ---------------------------------------------------------------------------
+# tests – TriadicSwapProposer
+# ---------------------------------------------------------------------------
+
+def test_triadic_swap_valid_move(toy_block_data):
+    rng = np.random.default_rng(7)
+    prop = TriadicSwapProposer(toy_block_data, rng=rng, candidate_trials=20)
+    changes, delta_e, _ = prop.propose_change()
+
+    # two tuples returned
+    assert len(changes) == 2
+    (i, tgt_i), (l, tgt_l) = changes
+    blocks = toy_block_data.blocks
+
+    # i moves to l's block and vice‑versa
+    assert tgt_i == blocks[l]
+    assert tgt_l == blocks[i]
+
+    # block sizes preserved ---------------------------------------------------
+    block_sizes = toy_block_data.block_sizes
+
+    after_blocks = _apply_changes(blocks, changes)
+    new_block_sizes = {
+        b: sum(1 for v in after_blocks.values() if v == b)
+        for b in set(after_blocks.values())
+    }
+
+    for block, size in new_block_sizes.items():
+        assert size == block_sizes[block], \
+            f"Block {block} size changed: expected {block_sizes[block]}, got {size}"
+
+    # delta‑edge correctness --------------------------------------------------
+    before = _block_edge_matrix(toy_block_data.graph_data.adjacency, blocks, 2)  # type: ignore[attr-defined]
+    after = _block_edge_matrix(toy_block_data.graph_data.adjacency, after_blocks, 2)
+    _assert_delta_matches(delta_e, before, after)

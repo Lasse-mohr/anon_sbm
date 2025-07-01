@@ -5,7 +5,6 @@ Classes to build and hold changes in edge counts between blocks in a Stochastic 
 from typing import DefaultDict, Tuple, List, Literal, Tuple, Iterator, Iterable, Literal
 from collections import defaultdict, Counter
 
-import line_profiler
 import numpy as np
 from numba import jit
 
@@ -16,7 +15,6 @@ class EdgeDelta: # edge-count changes between blocks
     def __init__(self, n_blocks: int):
         self._deltas: DefaultDict[Tuple[int, int], int] = defaultdict(int)
 
-    @line_profiler.profile
     def _increment(self, count: int, block_i: int, block_j: int,
      ) -> None:
         """
@@ -97,16 +95,28 @@ class NumpyEdgeDelta(EdgeDelta):
 
     __slots__ = ("n_blocks", "rows", "cols", "data", "size", "_key2idx")
 
-    def __init__(self, n_blocks: int, initial_capacity: int = 64):
+    def __init__(self,
+                 n_blocks: int,
+                 initial_capacity: int = 64
+    ):
         self.n_blocks: int = int(n_blocks)
         cap = max(1, initial_capacity)
         self.rows: np.ndarray = np.empty(cap, dtype=np.int32)
         self.cols: np.ndarray = np.empty(cap, dtype=np.int32)
         self.data: np.ndarray = np.zeros(cap, dtype=np.int32)
         self.size: int = 0
+
         # auxiliary map for *O(1)* lookup – not accessed inside JIT code
         self._key2idx: dict[int, int] = {}
 
+    ### function for printing the object
+    def __repr__(self) -> str:
+        """Return a string representation of the NumpyEdgeDelta object."""
+        return (f"NumpyEdgeDelta(n_blocks={self.n_blocks}, "
+                f"size={self.size}, "
+                f"rows={self.rows[:self.size]}, "
+                f"cols={self.cols[:self.size]}, "
+                f"data={self.data[:self.size]})")
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -122,23 +132,23 @@ class NumpyEdgeDelta(EdgeDelta):
             self.cols = np.resize(self.cols, new_cap)
             self.data = np.resize(self.data, new_cap)
 
-    def _increment(self, i: int, j: int, value: int):
+    def _increment(self, count: int, block_i: int, block_j: int):
         """Add *value* to entry (i, j) (symmetric pair)."""
-        if i > j:
-            i, j = j, i
-        key = self._encode(i, j)
+        if block_i > block_j:
+            block_i, block_j = block_j, block_i
+        key = self._encode(block_i, block_j)
         idx = self._key2idx.get(key)
 
         if idx is None:
             self._ensure_capacity()
             idx = self.size
             self.size += 1
-            self.rows[idx] = i
-            self.cols[idx] = j
-            self.data[idx] = value
+            self.rows[idx] = block_i
+            self.cols[idx] = block_j
+            self.data[idx] = count
             self._key2idx[key] = idx
         else:
-            self.data[idx] += value
+            self.data[idx] += count
 
     # ------------------------------------------------------------------
     # Public API
@@ -172,7 +182,6 @@ class NumpyEdgeDelta(EdgeDelta):
         """Return the *active* COO view (no copying)."""
         return (self.rows[:self.size], self.cols[:self.size], self.data[:self.size])
 
-    @jit(fastmath=True)
     def increment(self,
             counts: Iterable[int],
             blocks_i: Iterable[int],
@@ -233,4 +242,4 @@ class NumpyEdgeDelta(EdgeDelta):
 
         for r, c, dv in zip(rows, cols, reduced):
             if dv != 0:
-                self._increment(int(r), int(c), int(dv))
+                self._increment(block_i=int(r), block_j=int(c), count=int(dv))

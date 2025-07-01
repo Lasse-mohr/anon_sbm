@@ -59,7 +59,9 @@ def main(fit_config: str): # type: ignore
         block_data = assigner.compute_assignment()
         # check block sizes
 
-        model = SBMModel(block_data, rng=rng)
+        model = SBMModel(
+            initial_blocks=block_data,
+            rng=rng)
         # fit SBM model
         name = ds["name"] + "_".join(
             f"{k}_{v}" for k, v in sbm_config.items() # type: ignore
@@ -69,9 +71,7 @@ def main(fit_config: str): # type: ignore
         tic = time()
         with CSVLogger(log_path, log_every=logging_config['log_every']) as logger:
             model.fit(
-                max_num_iterations=sbm_config["max_n_iter"], # type: ignore
                 min_block_size=sbm_config["min_block_size"], # type: ignore
-                initial_temperature=sbm_config["temperature"], # type: ignore
                 cooling_rate=sbm_config["cooling_rate"], # type: ignore
                 logger=logger,
                 patience=sbm_config.get("patience", None), # type: ignore

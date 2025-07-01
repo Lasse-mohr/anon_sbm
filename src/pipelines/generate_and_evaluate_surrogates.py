@@ -52,7 +52,7 @@ def main(fit_config: str, eval_config: str): # type: ignore
 
             # load fitted model
             fit_folder_path = sbmfit_folderpath(
-                base_dir=Path("data/sbm_fits"),
+                base_dir=Path("results/sbm_fits"),
                 sbm_config=sbm_config,# type: ignore
                 data_spec=ds,
             )

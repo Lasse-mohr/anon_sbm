@@ -1,7 +1,6 @@
 from typing import List, Optional, Tuple, DefaultDict, Literal
 from collections import defaultdict, Counter
 
-import line_profiler
 import numpy as np
 from sbm.block_data import BlockData
 from sbm.edge_delta import EdgeDelta, NumpyEdgeDelta
@@ -10,8 +9,10 @@ from sbm.edge_delta import EdgeDelta, NumpyEdgeDelta
 CombinationDelta= DefaultDict[Tuple[int, int], int] # changes in possible pairs between blocks
 ProposedValidChanges = List[Tuple[int, int]]  # list of proposed node-block pairs
 
-ChangeProposerName = Literal["swap"]
-ChangeProposers = Literal["NodeSwapProposer"]
+ChangeProposerName = Literal["uniform_swap", "edge_based_swap", "triadic_swap"]
+ChangeProposers = Literal["NodeSwapProposer", "EdgeBasedSwapProposer", "TriadicSwapProposer"]
+
+
 
 ### ChangeProposer classes for proposing block changes in the SBM
 # These classes handle the logic of proposing valid changes to the block assignments
@@ -36,6 +37,10 @@ class ChangeProposer:
         self.rng = rng
         self.min_block_size = 1
         self.use_numpy = use_numpy
+
+        # Direct CSR pointers for O(1) edge sampling
+        self._indptr = self.block_data.graph_data.adjacency.indptr
+        self._indices = self.block_data.graph_data.adjacency.indices
     
     def propose_change(self,
         changes: Optional[ProposedValidChanges] = None,
@@ -50,8 +55,7 @@ class ChangeProposer:
         :return: EdgeDelta containing the changes in edge counts between blocks.
         """
         raise NotImplementedError("This method should be overridden by subclasses.")
-    
-    @line_profiler.profile
+    # -----------------------------------------------------------------------------
     def _compute_edge_counts_between_node_and_blocks(self,
                                                node: int,
                                                ) -> Counter[int]:
@@ -81,7 +85,6 @@ class ChangeProposer:
             return k_i
 
 class NodeSwapProposer(ChangeProposer):
-    @line_profiler.profile
     def propose_change(self,
         changes: Optional[ProposedValidChanges] = None,
     ) -> Tuple[ProposedValidChanges, EdgeDelta, CombinationDelta]:
@@ -117,22 +120,18 @@ class NodeSwapProposer(ChangeProposer):
 
             proposed_changes :ProposedValidChanges = [(node1, block2), (node2, block1)]
 
-        if self.use_numpy:
-            delta_e: EdgeDelta = NumpyEdgeDelta(
-                n_blocks=len(self.block_data.block_sizes)
-            )
-        else:
-            delta_e: EdgeDelta = self._compute_delta_edge_counts(
-                proposed_changes=proposed_changes
+        delta_e: EdgeDelta = self._compute_delta_edge_counts(
+                proposed_changes=proposed_changes,
+                use_numpy=self.use_numpy,
             )
 
         delta_n: CombinationDelta = defaultdict(int)
 
         return proposed_changes, delta_e, delta_n
     
-    @line_profiler.profile
     def _compute_delta_edge_counts(self,
-            proposed_changes: ProposedValidChanges
+            proposed_changes: ProposedValidChanges,
+            use_numpy: bool = False,
         )-> EdgeDelta:
         """
         Compute the changes in edge counts between blocks due to swapping
@@ -151,60 +150,20 @@ class NodeSwapProposer(ChangeProposer):
         
         (i, old_block_j), (j, old_block_i) = proposed_changes
 
-        delta_e = EdgeDelta(
-            n_blocks=len(self.block_data.block_sizes)
-        )
-
-        #block_i_idx = self.block_data.block_indices[old_block_i]
-        #block_j_idx = self.block_data.block_indices[old_block_j]
+        if use_numpy:
+            delta_e = NumpyEdgeDelta(
+                n_blocks=len(self.block_data.block_sizes)
+            )
+        else:
+            delta_e = EdgeDelta(
+                n_blocks=len(self.block_data.block_sizes)
+            )
 
         # compute the edge counts for the blocks of i and j
         # on block-adjacency idx level
         k_i = self._compute_edge_counts_between_node_and_blocks(i)
         k_j = self._compute_edge_counts_between_node_and_blocks(j)
         affected_blocks = set(k_i.keys()) | set(k_j.keys())
-
-        # The following code is commented out because it is not used in the current implementation.
-        # (Old implementation)
-        #for i in affected_blocks - {old_block_i, old_block_j}:
-            ## Δm_{r t}
-            #delta_e = _increment_delta_e(
-            #    count = -k_i[t] + k_j[t],
-            #    block_i = old_block_i,
-            #    block_j = t,
-            #    delta_e = delta_e,
-            #)
-            ## Δm_{s t}
-            #delta_e = _increment_delta_e(
-            #    count = -k_j[t] + k_i[t],
-            #    block_i = old_block_j,
-            #    block_j = t,
-            #    delta_e = delta_e,
-            #)
-        ## Add the changes for the old blocks of i and j
-        #has_edge_ij = bool(self.block_data.graph_data.adjacency[i, j])
-
-        #delta_e = _increment_delta_e(
-        #    count = k_i[old_block_i] - k_i[old_block_j] \
-        #            + k_j[old_block_j] - k_j[old_block_i] \
-        #            + 2 * has_edge_ij,
-        #    block_i=old_block_i,
-        #    block_j=old_block_j,
-        #    delta_e=delta_e
-        #)
-
-        #delta_e = _increment_delta_e(
-        #    count = k_j[old_block_i] - k_i[old_block_i] - has_edge_ij,
-        #    block_i=old_block_i,
-        #    block_j=old_block_i,
-        #    delta_e=delta_e
-        #)
-        #delta_e = _increment_delta_e(
-        #    count = k_i[old_block_j] - k_j[old_block_j] - has_edge_ij,
-        #    block_i=old_block_j,
-        #    block_j=old_block_j,
-        #    delta_e=delta_e
-        #)
 
         # new implementation with combined increment function
         neighbor_blocks = affected_blocks - {old_block_i, old_block_j}
@@ -216,7 +175,7 @@ class NodeSwapProposer(ChangeProposer):
         ]
         blocks_i = [old_block_i] * len(neighbor_blocks) + [old_block_j] * len(neighbor_blocks)
         block_j = list(neighbor_blocks) + list(neighbor_blocks)
-        
+
         delta_e.increment(
             counts = counts,
             blocks_i = blocks_i,
@@ -236,3 +195,175 @@ class NodeSwapProposer(ChangeProposer):
         )
 
         return delta_e
+
+
+# -----------------------------------------------------------------------------
+#  Edge‑based swap proposer
+# -----------------------------------------------------------------------------
+class EdgeBasedSwapProposer(NodeSwapProposer):
+    """A Peixoto‑style *edge‑conditioned* two‑vertex swap.
+
+    1. Pick a **cross‑block edge** ``(i,j)`` uniformly at random.
+    2. Swap the block labels of its end‑points.
+
+    The proposal is *symmetric* (uniform over edges), so the Metropolis–
+    Hastings acceptance probability is simply ``min(1, exp(Δℓ/T))``.
+    """
+
+    def __init__(
+        self,
+        block_data,
+        rng: np.random.Generator = np.random.default_rng(1),
+        use_numpy: bool = True,
+        max_trials: int = 128,
+    ) -> None:
+        super().__init__(block_data=block_data, rng=rng, use_numpy=use_numpy)
+        self.max_trials = max_trials
+
+        # Direct CSR pointers for O(1) edge sampling
+        self._indptr = self.block_data.graph_data.adjacency.indptr
+        self._indices = self.block_data.graph_data.adjacency.indices
+
+    # ------------------------------------------------------------------
+    def propose_change(
+        self,
+        changes: Optional[ProposedValidChanges] = None,
+    ) -> Tuple[ProposedValidChanges, EdgeDelta, CombinationDelta]:
+        if changes is not None:
+            return super().propose_change(changes=changes)
+
+        n = self.block_data.graph_data.num_nodes  # type: ignore[attr-defined]
+        blocks = self.block_data.blocks
+
+        for _ in range(self.max_trials):
+            i = int(self.rng.integers(n))
+
+            # get i's neighbor index-range (adj is csr format)
+            istart, iend = self._indptr[i], self._indptr[i + 1]
+            if iend == istart:
+                continue  # isolated vertex
+            
+            # pick a random neighbor j
+            j = int(self.rng.choice(self._indices[istart:iend]))
+
+            bi, bj = blocks[i], blocks[j]
+            if bi == bj:
+                continue  # need a cross‑block edge
+
+            proposed_changes: ProposedValidChanges = [(i, bj), (j, bi)]
+            break
+        else:  # all trials failed – fall back to uniform swap
+            return super().propose_change(changes=None)
+
+        delta_e = self._compute_delta_edge_counts(
+            proposed_changes=proposed_changes,
+            use_numpy=self.use_numpy,
+        )
+        delta_n: CombinationDelta = defaultdict(int)  # block sizes unchanged
+        return proposed_changes, delta_e, delta_n
+
+
+# -----------------------------------------------------------------------------
+#  Triadic informed swap   (new implementation)
+# -----------------------------------------------------------------------------
+class TriadicSwapProposer(NodeSwapProposer):
+    """A *three‑vertex* informed swap.
+
+    Strategy
+    --------
+    1. Pick a random vertex ``i`` (block *A*).
+    2. Choose a random neighbour ``j`` with ``block(j) = B \neq A``.
+    3. Search in block *B* for a vertex ``l \ne j`` that has **at least one**
+       neighbour in block *A*.
+    4. Swap the block labels of ``i`` and ``l``.
+
+    Swapping these two vertices reduces the expected number of *cross* edges by
+    converting:
+    * all edges from ``i`` into *B* to *internal*, and
+    * all edges from `l``` into *A* to *internal*,
+    while typically adding fewer new cross edges because ``i`` and ``j'`` were
+    originally “boundary” vertices.
+
+    The proposal distribution is still *symmetric* because every triad is
+    selected with the same probability in either direction, so the usual MH
+    acceptance rule applies.
+    """
+
+    def __init__(
+        self,
+        block_data,
+        rng: np.random.Generator = np.random.default_rng(1),
+        use_numpy: bool = False,
+        max_trials: int = 128,
+        candidate_trials: int = 64,
+    ) -> None:
+        super().__init__(block_data=block_data, rng=rng, use_numpy=use_numpy)
+        self.max_trials = max_trials            # attempts to find (i,j)
+        self.candidate_trials = candidate_trials  # attempts to find j′ per (i,j)
+        self._indptr = self.block_data.graph_data.adjacency.indptr
+        self._indices = self.block_data.graph_data.adjacency.indices
+
+    # ------------------------------------------------------------------
+    def propose_change(
+        self,
+        changes: Optional[ProposedValidChanges] = None,
+    ) -> Tuple[ProposedValidChanges, EdgeDelta, CombinationDelta]:
+        # Explicit‑changes path used in unit tests
+        if changes is not None:
+            return super().propose_change(changes=changes)
+
+        n = self.block_data.graph_data.num_nodes  # type: ignore[attr-defined]
+        blocks = self.block_data.blocks
+
+        for _ in range(self.max_trials):
+            # ---- step 1: pick i ------------------------------------------------
+            i = int(self.rng.integers(n))
+
+            # find i's neighbour index-range (adj is csr format)
+            istart, iend = self._indptr[i], self._indptr[i + 1]
+            if iend == istart:
+                continue  # isolated – try another
+
+            # ---- step 2: pick neighbour j in a *different* block --------------
+            neighs_i = self._indices[istart:iend]
+            j = int(self.rng.choice(neighs_i))
+            a, b = blocks[i], blocks[j]
+            if a == b:
+                continue  # need a cross edge i‑j
+
+            # ---- step 3: find j′ in block b that touches block a --------------
+            block_b_members = self.block_data.block_members[b]
+
+            # change to list and randomlize order
+            block_b_members = list(block_b_members)
+            self.rng.shuffle(block_b_members)
+            
+            for l in block_b_members[:self.candidate_trials]:
+                if l in (i, j):
+                    continue
+                
+                # find neighbors of l in block a
+                lstart, lend = self._indptr[l], self._indptr[l + 1]
+                l_neighbors = self._indices[lstart:lend]
+
+                l_neighbor_in_block_a = any(
+                    blocks[neighbor] == a for neighbor in l_neighbors
+                )
+                if not l_neighbor_in_block_a:
+                    continue  # l must touch block a
+
+                proposed_changes: ProposedValidChanges = [(i, b), (l, a)]
+
+                delta_e = self._compute_delta_edge_counts(
+                    proposed_changes=proposed_changes,
+                    use_numpy=self.use_numpy,
+                )
+                delta_n: CombinationDelta = defaultdict(int)
+                return proposed_changes, delta_e, delta_n
+            # could not find j′ – back to outer loop
+            continue
+
+        # ---- fallback --------------------------------------------------------
+        # If every attempt failed (e.g. almost perfect partition), fall back to
+        # a plain uniform swap to keep the chain ergodic.
+        return super().propose_change(changes=None)

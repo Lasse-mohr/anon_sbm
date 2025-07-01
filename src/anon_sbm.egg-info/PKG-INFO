@@ -17,5 +17,7 @@ Requires-Dist: k-means-constrained
 Requires-Dist: nodevectors
 Requires-Dist: tqdm
 Requires-Dist: scikit-learn
+Requires-Dist: pytest
+Requires-Dist: line_profiler
 
 # anon_sbm
