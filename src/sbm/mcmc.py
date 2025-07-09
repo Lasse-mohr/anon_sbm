@@ -48,7 +48,7 @@ class MCMCAlgorithm:
             min_block_size: Optional[int] = None,
             max_blocks: Optional[int] = None,
             logger: Optional[CSVLogger] = None,
-            patience: Optional[int] = 10_000
+            patience: Optional[int] = None,
         ) -> List[float]:
         """
         Run the adaptive MCMC algorithm to fit the SBM to the network data.
@@ -64,6 +64,11 @@ class MCMCAlgorithm:
         current_nll = self.likelihood_calculator.nll
         acceptance_rate = 0 # acceptance rate of moves between logging
         nll_list = [current_nll]
+
+        # if patience None, set based on the graph size
+        if patience is None:
+            n_nodes = self.block_data.graph_data.num_nodes
+            patience = min(int(0.1 * n_nodes*(n_nodes - 1) // 2), 10**5)
 
         if logger:
             logger.log(0, current_nll, acceptance_rate, temperature)

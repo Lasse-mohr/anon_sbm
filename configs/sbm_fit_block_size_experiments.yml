@@ -17,25 +17,21 @@ sbm:
     cooling_rate: 0.9999
     force_undirected: true
     init_method: "metis"
-    patience: 1000
 
   - min_block_size: 6
     cooling_rate: 0.9999
     force_undirected: true
     init_method: "metis"
-    patience: 1000
 
   - min_block_size: 12
     cooling_rate: 0.9999
     force_undirected: true
     init_method: "metis"
-    patience: 1000
 
   - min_block_size: 25
     cooling_rate: 0.9999
     force_undirected: true
     init_method: "metis"
-    patience: 1000
 # -------------------------------------------------------------------
 #  Configuration for the logging
 #  - logging_folder: folder to save the logs
@@ -63,11 +59,11 @@ datasets:
     path: data/processed/eu_email.edgelist # undirected GML
 
 # medium datasets (1000 - 10_000 nodes):
-  #- name: lastfm_asia
-  #  path: data/processed/lastfm_asia.edgelist # undirected GML
-  #- name: wiki_vote
-  #  path: data/processed/wiki_vote.edgelist # undirected GML
+  - name: lastfm_asia
+    path: data/processed/lastfm_asia.edgelist # undirected GML
+  - name: wiki_vote
+    path: data/processed/wiki_vote.edgelist # undirected GML
 
 # large datasets (10_000-100_000 nodes):
-  #- name: enron_email 
-  #  path: data/processed/enron_email.edgelist # undirected GML
+  - name: enron_email 
+    path: data/processed/enron_email.edgelist # undirected GML

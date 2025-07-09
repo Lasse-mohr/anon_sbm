@@ -367,3 +367,178 @@ class TriadicSwapProposer(NodeSwapProposer):
         # If every attempt failed (e.g. almost perfect partition), fall back to
         # a plain uniform swap to keep the chain ergodic.
         return super().propose_change(changes=None)
+
+# -----------------------------------------------------------------------------#
+#  Cross-triangle (cross-wedge) swap proposer                                   #
+# -----------------------------------------------------------------------------#
+class CrossTriangleSwapProposer(NodeSwapProposer):
+    """
+    Swap the *odd* vertex of an open cross-wedge.
+
+    1. Draw a **cross edge** (i,j) uniformly at random.
+    2. Pick a random neighbour k of j such that block(k) == block(i) (i.e. an
+       *open wedge* i-j-k with i,k in the same block, j outside that block).
+    3. Swap the block labels of *i* and *j*.
+
+    When i-k are **not directly connected**, the move converts two cross edges
+    (i,j) and (j,k) into one cross edge (i,j) and one *internal* edge (j,k),
+    giving a positive Δ log-likelihood in expectation.  Proposal is symmetric.
+    """
+
+    def __init__(
+        self,
+        block_data: BlockData,
+        rng: np.random.Generator = np.random.default_rng(1),
+        use_numpy: bool = True,
+        max_trials: int = 256,
+        neighbour_trials: int = 8,
+    ) -> None:
+        super().__init__(block_data=block_data, rng=rng, use_numpy=use_numpy)
+        self.max_trials = max_trials
+        self.neighbour_trials = neighbour_trials
+        self._indptr = self.block_data.graph_data.adjacency.indptr
+        self._indices = self.block_data.graph_data.adjacency.indices
+
+    # ------------------------------------------------------------------
+    def propose_change(
+        self,
+        changes: Optional[ProposedValidChanges] = None,
+    ) -> Tuple[ProposedValidChanges, EdgeDelta, CombinationDelta]:
+
+        if changes is not None:                     # path for unit tests
+            return super().propose_change(changes)
+
+        n = self.block_data.graph_data.num_nodes    # type: ignore[attr-defined]
+        blocks = self.block_data.blocks
+
+        for _ in range(self.max_trials):
+            # ---- pick a random edge -----------------------------------------
+            i = int(self.rng.integers(n))
+            istart, iend = self._indptr[i], self._indptr[i + 1]
+            if istart == iend:
+                continue                            # i is isolated
+
+            j = int(self.rng.choice(self._indices[istart:iend]))
+            bi, bj = blocks[i], blocks[j]
+            if bi == bj:
+                continue                            # need a cross edge
+
+            # ---- search a neighbour k of j inside block bi ------------------
+            jstart, jend = self._indptr[j], self._indptr[j + 1]
+            nbrs_j = self._indices[jstart:jend]
+            if len(nbrs_j) == 0:
+                continue
+
+            # sample up to neighbour_trials neighbours
+            cand = self.rng.choice(
+                nbrs_j,
+                size=min(self.neighbour_trials, len(nbrs_j)),
+                replace=False,
+            )
+            k = next((int(v) for v in cand if blocks[v] == bi and v != i), None)
+            if k is None:
+                continue                            # wedge not found
+
+            # ---- valid cross-wedge: swap i and j ----------------------------
+            proposed_changes: ProposedValidChanges = [(i, bj), (j, bi)]
+            delta_e = self._compute_delta_edge_counts(
+                proposed_changes=proposed_changes,
+                use_numpy=self.use_numpy,
+            )
+            delta_n: CombinationDelta = defaultdict(int)
+            return proposed_changes, delta_e, delta_n
+
+        # fallback to uniform swap
+        return super().propose_change(changes=None)
+
+
+# -----------------------------------------------------------------------------#
+#  Twin-leaf swap proposer                                                     #
+# -----------------------------------------------------------------------------#
+class TwinLeafSwapProposer(NodeSwapProposer):
+    """
+    Swap two *leaves* whose neighbours lie in each other’s blocks.
+
+    1. Pick a random **leaf** i (deg=1) whose neighbour u is in block B != block(i).
+    2. Inside block B, look for another leaf k (deg=1, k≠i) whose sole neighbour
+       v lies in block A = block(i).
+    3. Swap the labels of i and k.
+
+    This move removes two cross edges and introduces *zero* new ones, because
+    leaves have no other connections.  Works great on heavy-tailed networks.
+    """
+
+    def __init__(
+        self,
+        block_data: BlockData,
+        rng: np.random.Generator = np.random.default_rng(1),
+        use_numpy: bool = True,
+        max_trials: int = 256,
+        partner_trials: int = 32,
+    ) -> None:
+        super().__init__(block_data=block_data, rng=rng, use_numpy=use_numpy)
+        self.max_trials = max_trials
+        self.partner_trials = partner_trials
+        self._indptr = self.block_data.graph_data.adjacency.indptr
+        self._indices = self.block_data.graph_data.adjacency.indices
+
+    # ------------------------------------------------------------------
+    def _is_leaf(self, v: int) -> bool:
+        return (self._indptr[v + 1] - self._indptr[v]) == 1
+
+    # ------------------------------------------------------------------
+    def propose_change(
+        self,
+        changes: Optional[ProposedValidChanges] = None,
+    ) -> Tuple[ProposedValidChanges, EdgeDelta, CombinationDelta]:
+
+        if changes is not None:
+            return super().propose_change(changes)
+
+        n = self.block_data.graph_data.num_nodes    # type: ignore[attr-defined]
+        blocks = self.block_data.blocks
+
+        for _ in range(self.max_trials):
+            # ---- step 1: choose a random leaf i -----------------------------
+            i = int(self.rng.integers(n))
+            if not self._is_leaf(i):
+                continue
+
+            # unique neighbour of i
+            u = int(self._indices[self._indptr[i]])
+            a, b = blocks[i], blocks[u]
+            if a == b:
+                continue                            # internal leaf – ignore
+
+            # ---- step 2: search leaf partner k in block b -------------------
+            block_b_members = list(self.block_data.block_members[b])
+            if len(block_b_members) <= 1:
+                continue
+
+            self.rng.shuffle(block_b_members)
+            trials = 0
+            for k in block_b_members:
+                if trials >= self.partner_trials:
+                    break
+                trials += 1
+
+                if k == i or (not self._is_leaf(k)):
+                    continue
+
+                v = int(self._indices[self._indptr[k]])
+                if blocks[v] != a:                  # neighbour must lie in block a
+                    continue
+
+                # ---- valid twin leaves found: swap i,k ----------------------
+                proposed_changes: ProposedValidChanges = [(i, b), (k, a)]
+                delta_e = self._compute_delta_edge_counts(
+                    proposed_changes=proposed_changes,
+                    use_numpy=self.use_numpy,
+                )
+                delta_n: CombinationDelta = defaultdict(int)
+                return proposed_changes, delta_e, delta_n
+            # partner not found – try another i
+            continue
+
+        # fallback
+        return super().propose_change(changes=None)

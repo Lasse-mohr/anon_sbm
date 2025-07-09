@@ -21,7 +21,7 @@ if __name__ == "__main__":
     ])
     run([
         python, "-m",
-        "pipelines.generate_and_evaluate_surrogates",
+        "pipelines.evaluate_surrogates",
         "--fit_config", CFG_FIT,
         "--eval_config", CFG_EVAL,
     ])

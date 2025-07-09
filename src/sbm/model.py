@@ -10,8 +10,11 @@ from sbm.likelihood import (
 from sbm.block_change_proposers import (
     NodeSwapProposer,
     EdgeBasedSwapProposer,
-    ChangeProposerName,
+    TriadicSwapProposer,
+    CrossTriangleSwapProposer,
+    TwinLeafSwapProposer
 )
+
 from sbm.node_mover import NodeMover
 from sbm.mcmc import MCMCAlgorithm
 
@@ -25,7 +28,7 @@ class SBMModel:
                 likelihood_type: LikelihoodType = "bernoulli",
                 log: bool = True,
                 change_freq = { # probabilities of trying each move type
-                    "uniform_swap": 1.0,
+                    "edge_based_swap": 1.0,
                 }
         ):
 
@@ -55,7 +58,17 @@ class SBMModel:
                         rng=self.rng,
                         use_numpy=False,
                     ),
-            "triadic_swap": EdgeBasedSwapProposer(
+            "triadic_swap": TriadicSwapProposer(
+                        block_data=self.block_data,
+                        rng=self.rng,
+                        use_numpy=True,
+                    ),
+            "twin_leaf": TwinLeafSwapProposer(
+                        block_data=self.block_data,
+                        rng=self.rng,
+                        use_numpy=True,
+                    ),
+            "cross_triangle": CrossTriangleSwapProposer(
                         block_data=self.block_data,
                         rng=self.rng,
                         use_numpy=True,

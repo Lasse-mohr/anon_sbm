@@ -1,0 +1,12 @@
+import numpy as np
+from scipy.sparse import csr_array
+from metrics.clustering import avg_clustering_difference
+from tests.metrics.conftest import _line_graph, _complete_graph
+
+def test_identical_zero() -> None:
+    A: csr_array = _line_graph()
+    assert avg_clustering_difference(A, A) == 0.0
+
+def test_line_vs_complete() -> None:
+    d = avg_clustering_difference(_line_graph(10), _complete_graph(10))
+    assert d > 0 and np.isfinite(d)

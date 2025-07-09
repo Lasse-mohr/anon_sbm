@@ -1,9 +1,10 @@
 # ---------------------------------------------------------------
 n_surrogates: 20 # graphs to sample per dataset
 overwrite: false # set true to ignore cached results
+# privacy levels
+eps: [1, 3, 5]
+delta: [1e-4]
 
-
-# which similarity metrics to compute
 metrics:
   - shortest_path
   - avg_path_length
@@ -15,5 +16,5 @@ metrics:
   - infomap
   - leiden
   - assortativity
-  - embedding_node2vec
+  #- embedding_node2vec
   - embedding_prone

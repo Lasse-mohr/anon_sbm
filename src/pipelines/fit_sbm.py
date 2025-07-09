@@ -74,7 +74,6 @@ def main(fit_config: str): # type: ignore
                 min_block_size=sbm_config["min_block_size"], # type: ignore
                 cooling_rate=sbm_config["cooling_rate"], # type: ignore
                 logger=logger,
-                patience=sbm_config.get("patience", None), # type: ignore
             )
 
         # save the fitted model

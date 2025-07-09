@@ -88,8 +88,8 @@ def surrogate_statistics_filename(
     file_name = (
         f"{data_spec['name']}_"
         f"surrogates_{eval_configs['n_surrogates']}_"
-        f"{'_'.join(eval_configs['metrics'])}_"
-        f"{'_'.join(f'{k}_{v}' for k, v in sorted(sbm_config.items()))}"
+            #f"{'_'.join(eval_configs['metrics'])}_"
+        #f"{'_'.join(f'{k}_{v}' for k, v in sorted(sbm_config.items()))}"
     )
     file_name = clean_filename(file_name)
 

@@ -1,8 +1,5 @@
 """ 
-Implementation of the shortest path distribution distance metric.
-This module computes the Earth-mover distance (1-D Wasserstein distance)
-between the distributions of all-pairs shortest-path lengths
-in two graphs represented by their adjacency matrices.
+Metrics functions to compare the shortest-path properties of two graphs.
 """
 # metrics/shortest_path.py
 from typing import Optional
@@ -10,14 +7,43 @@ import numpy as np
 import networkx as nx
 from scipy.stats import wasserstein_distance #  1-D EMD
 from scipy.sparse import csr_array
-from scipy.sparse.csgraph import shortest_path
 
-from sbm.utils.util import restrict_to_lcc
+from sbm.utils.util import restrict_to_lcc, _nx_graph
 
 import networkx as nx
-from typing import Iterable, Hashable, List, Union
+from typing import  Hashable, List, Union
 
+### Aliases  --------------------------------------------------------
 Number = Union[int, float]
+
+### Helpers ---------------------------------------------------------
+def _average_path_length(
+    G: nx.Graph,
+    *,
+    n_samples: Optional[int],
+    rng: np.random.Generator,
+) -> float:
+    """Return ⟨d⟩ ≡ mean shortest‑path length in *G*.
+
+    If *n_samples* is None or the graph is small (≤ 2000 nodes), the exact
+    average is computed. Otherwise *n_samples* node pairs are sampled.
+    """
+    n = G.number_of_nodes()
+    if n <= 1:
+        return 0.0
+    if n_samples is None or n <= 2000:
+        return nx.average_shortest_path_length(G)
+    # --- sample pairs ---------------------------------------------------------
+    nodes = list(G)
+    path_lens: List[int] = []
+    for _ in range(int(n_samples)):
+        u, v = rng.choice(nodes, size=2, replace=False)
+        try:
+            path_lens.append(nx.shortest_path_length(G, u, v))
+        except nx.NetworkXNoPath:
+            # Ignore unreachable pairs → corresponds to infinite distance.
+            pass
+    return float(np.mean(path_lens)) if path_lens else np.inf
 
 def all_unique_shortest_distances(
     G: nx.Graph,
@@ -67,6 +93,9 @@ def all_unique_shortest_distances(
 
     return distances
 
+###############################################################################
+### --- Metrics --------------------------------------------------------
+###############################################################################
 
 def shortest_path_distance(
         emp_adj: csr_array,
@@ -150,3 +179,33 @@ def shortest_path_distance(
         y = sample_shortest_paths(sur_adj, sur_pairs)
 
     return wasserstein_distance(x, y)
+
+###############################################################################
+# Average path‑length difference -------------------------------------------
+###############################################################################
+def avg_path_length_difference(
+    emp_adj: csr_array,
+    sur_adj: csr_array,
+    *,
+    n_samples: Optional[int] = 10_000,
+    rng: np.random.Generator = np.random.default_rng(1),
+    restrict_to_lcc: bool = True,
+) -> float:
+    """Absolute difference of average shortest‑path lengths.
+
+    Parameters
+    ----------
+    n_samples : int | None
+        If *None*, compute the exact average; otherwise sample this many
+        (unordered) node pairs.
+    """
+    G_emp = _nx_graph(emp_adj, directed=False)
+    G_sur = _nx_graph(sur_adj, directed=False)
+
+    if restrict_to_lcc:
+        G_emp = G_emp.subgraph(max(nx.connected_components(G_emp), key=len))
+        G_sur = G_sur.subgraph(max(nx.connected_components(G_sur), key=len))
+        
+    d_emp = _average_path_length(G_emp, n_samples=n_samples, rng=rng)
+    d_sur = _average_path_length(G_sur, n_samples=n_samples, rng=rng)
+    return abs(d_emp - d_sur)

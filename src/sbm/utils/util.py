@@ -1,4 +1,6 @@
 import numpy as np
+from pathlib import Path
+import networkx as nx
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse import csr_array
 
@@ -24,3 +26,10 @@ def restrict_to_lcc(adj: csr_array, directed:bool) -> csr_array:
     adj_lcc = csr_array(adj[mask][:, mask]) # type: ignore
 
     return adj_lcc
+
+def _nx_graph(adj: csr_array, *, directed: bool = False) -> nx.Graph:
+    """Convert *adj* to a NetworkX (di)graph, restricted to its LCC."""
+    adj_lcc = restrict_to_lcc(adj, directed)
+    return (
+        nx.from_scipy_sparse_matrix(adj_lcc, create_using=nx.DiGraph() if directed else nx.Graph())
+    )

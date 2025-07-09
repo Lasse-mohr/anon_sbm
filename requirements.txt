@@ -9,3 +9,7 @@ pyyaml
 nodevectors
 scikit-learn
 k-means-constrained
+line_profiler
+infomap
+leidenalg
+python-igraph

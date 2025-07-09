@@ -28,6 +28,7 @@ def sample_adjacency_matrix(
     :return: Sparse adjacency matrix of the sampled graph.
     """
 
+
     block_sizes = list(map(int, block_sizes))
     B = len(block_sizes)
     N = sum(block_sizes)
@@ -65,15 +66,17 @@ def sample_adjacency_matrix(
                 tri_r, tri_c = np.triu_indices(n_r, k=1)
                 sel = triu_mask[tri_r, tri_c]
                 rr = tri_r[sel]; cc = tri_c[sel]
-                rows.extend(off_r + rr); cols.extend(off_r + cc)
-                rows.extend(off_r + cc); cols.extend(off_r + rr)
+
+                rows.extend(off_r + rr)
+                cols.extend(off_r + cc)
+
+                rows.extend(off_r + cc)
+                cols.extend(off_r + rr)
 
         # -- off-diagonal blocks --------------------------------------
         s_iter = range(B) if directed else range(r + 1, B)
         for s in s_iter:
             if s == r:
-                continue
-            if not directed and s <= r:
                 continue
 
             m_rs = int(block_connectivity[r, s]) # type: ignore
