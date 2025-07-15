@@ -1,11 +1,15 @@
-from typing import Dict, Set, Optional
-
-from dataclasses import dataclass
+""" 
+Block data for the Stochastic Block Model (SBM).
+This module defines the `BlockData` class, which manages the block structure of the SBM,
+including block memberships, edge counts, and possible pairs of edges between blocks.
+It also provides methods to update the block data when nodes are moved between blocks,
+and to compute edge counts and possible pairs.
+"""
+from typing import Dict, Set, Sequence, Tuple
 
 import numpy as np
 import scipy.sparse as sp
 from sbm.graph_data import GraphData
-from sbm.sampling import sample_sbm_graph
 
 BlockConn = sp.dok_array
 BlockMembership = Dict[int, Set[int]]  # Block ID to set of node indices
@@ -95,7 +99,7 @@ class BlockData:
 
         # Recompute block connectivity based on the new graph data
         self.block_connectivity = self._compute_block_connectivity()
-        
+    # --------------------------------------------------------------------- # 
     def increment_edge_count(self, block_a: int, block_b: int, e_delta: int) -> None:
         """ 
         Increment the edge count between two blocks.
@@ -106,7 +110,7 @@ class BlockData:
         idx_a = self.block_indices[block_a]
         idx_b = self.block_indices[block_b]
         self.block_updater._increment_edge_count(idx_a, idx_b, e_delta)
-    
+    # --------------------------------------------------------------------- # 
     def get_possible_pairs(self, block_a: int, block_b:int ) -> int:
         """ 
         Compute the possible number of edges between two blocks.
@@ -118,7 +122,7 @@ class BlockData:
 
         # If different blocks, return the product of their sizes
         return self.block_sizes[block_a] * self.block_sizes[block_b]
-
+    # --------------------------------------------------------------------- # 
     def _initialize_block_members(self) -> BlockMembership:
         """
         Initialize block members from the blocks mapping.
@@ -137,7 +141,7 @@ class BlockData:
             block_members[block].add(node)
 
         return block_members
-
+    # --------------------------------------------------------------------- # 
     def _update_block_indices(self):
         """
         Update mappings between block IDs and indices used in matrices.
@@ -150,7 +154,7 @@ class BlockData:
         self.inverse_block_indices = {
             idx: block_id for block_id, idx in self.block_indices.items()
             }
-
+    # --------------------------------------------------------------------- # 
     def _compute_block_connectivity(self) -> BlockConn:
         """
         Compute the block connectivity matrix.
@@ -189,7 +193,7 @@ class BlockData:
                     block_connectivity_dok[idx_i, idx_j] = weight
 
             return block_connectivity_dok
-
+    # --------------------------------------------------------------------- # 
     def _remove_block_index(self, block_id: int):
         """
         Remove a block from block_indices and inverse_block_indices.
@@ -206,7 +210,7 @@ class BlockData:
             if index > idx:
                 self.block_indices[b_id] -= 1
                 self.inverse_block_indices[self.block_indices[b_id]] = b_id
-
+    # --------------------------------------------------------------------- # 
     def _remove_block_from_connectivity(self, block_id: int):
         """
         Remove the block's row and column from the block connectivity matrix.
@@ -222,7 +226,7 @@ class BlockData:
         non_slice_idx = np.arange(self.block_connectivity.shape[1]) != idx # type: ignore
 
         self.block_connectivity = slicable_array[:, non_slice_idx][non_slice_idx, :].todok()
-
+    # --------------------------------------------------------------------- # 
     def remove_block(self, block_id: int):
         """
         Remove a block from the block data.
@@ -234,7 +238,7 @@ class BlockData:
         del self.block_members[block_id]
         self._remove_block_from_connectivity(block_id)
         self._remove_block_index(block_id)
-
+    # --------------------------------------------------------------------- # 
     def _add_block_index(self, block_id: int):
         """
         Add a new block index for a new block.
@@ -259,7 +263,7 @@ class BlockData:
         connectivity_lil = sp.lil_matrix(self.block_connectivity)
         connectivity_lil.resize((num_blocks, num_blocks))
         self.block_connectivity = connectivity_lil.todok()
-    
+    # --------------------------------------------------------------------- # 
     def add_block(self, block_id: int, nodes=[]):
         """
         Add a new block to the block data.
@@ -276,3 +280,33 @@ class BlockData:
 
         self._add_block_index(block_id)
         self._add_block_to_connectivity()
+    # --------------------------------------------------------------
+    def counts_for_pairs(self,
+                         pairs: Sequence[Tuple[int, int]]
+                         ) -> np.ndarray:
+        """
+        Parameters
+        ----------
+        pairs : list of (r, s) with r < s
+
+        Returns
+        -------
+        np.ndarray, shape (len(pairs),)
+            Edge counts m_rs for those pairs.
+        """
+        # Fast path when the block matrix lives in a dict‑of‑dicts:
+        return np.fromiter(
+            (self.block_connectivity[r, s] for r, s in pairs),
+            dtype=np.int64, count=len(pairs)
+        )
+    # --------------------------------------------------------------
+    def diagonal_counts(self) -> np.ndarray:
+        """
+        Returns
+        -------
+        np.ndarray, shape (B,)
+            Internal edge counts m_rr for every block r.
+        """
+        # Extract diagonal elements directly from the sparse matrix
+        return self.block_connectivity.diagonal()
+    # --------------------------------------------------------------

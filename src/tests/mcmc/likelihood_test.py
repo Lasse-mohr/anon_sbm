@@ -84,7 +84,7 @@ def test_swap_same_block_zero_delta(four_node_example):
     # attempt to swap nodes 0 and 2
     swap = [(0, block_data.blocks[1]), (1, block_data.blocks[0])]
     swap, delta_e, delta_n = swap_proposer.propose_change(swap)
-    delta = calc.compute_delta_ll(delta_e=delta_e, delta_n=delta_n)
+    delta = calc.compute_delta_nll(delta_e=delta_e, delta_n=delta_n)
 
     assert delta == pytest.approx(0.0, abs=1e-6)
 
@@ -115,7 +115,7 @@ def test_delta_ll_matches_global_recompute(four_node_example):
     swap = [(0, block_data_old.blocks[2]), (2, block_data_old.blocks[0])]
     swap, delta_e, delta_n = swap_proposer.propose_change(swap)
 
-    delta_calc = calc.compute_delta_ll(delta_e=delta_e, delta_n=delta_n)
+    delta_calc = calc.compute_delta_nll(delta_e=delta_e, delta_n=delta_n)
 
     msg = (
         f"Failed on swap (0 ↔ 2) with blocks {blocks_old} → {blocks_new}\n"
@@ -209,17 +209,17 @@ def _single_swap_calc_vs_bruteforce(
     swap_instr = [(i, blocks[j]), (j, blocks[i])]
     _, delta_e, delta_n = swap_proposer.propose_change(swap_instr)
 
-    delta_ll = calc.compute_delta_ll(delta_e=delta_e, delta_n=delta_n)
+    delta_ll = calc.compute_delta_nll(delta_e=delta_e, delta_n=delta_n)
 
     # brute-force path -------------------------------------------------
-    ll_before = compute_global_bernoulli_ll(block_data)
+    nll_before = -compute_global_bernoulli_ll(block_data)
 
     new_blocks = blocks.copy()
     new_blocks[i], new_blocks[j] = new_blocks[j], new_blocks[i]
 
     block_data_after = BlockData(graph_data=graph_data, initial_blocks=new_blocks)
-    ll_after = compute_global_bernoulli_ll(block_data_after)
-    delta_brute = ll_after - ll_before
+    nll_after = -compute_global_bernoulli_ll(block_data_after)
+    delta_brute = nll_after - nll_before
 
     # compute the delta_e in the brute-force way
     # only storing non-zero deltas in upper triangular matrix

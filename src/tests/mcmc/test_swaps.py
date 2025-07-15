@@ -1,7 +1,6 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # tests/test_swap_move.py
 # ──────────────────────────────────────────────────────────────────────────────
-
 import networkx as nx
 import numpy as np
 import pytest
@@ -9,7 +8,7 @@ import pytest
 from sbm.block_assigner import MetisBlockAssigner
 from sbm.block_change_proposers import NodeSwapProposer
 from sbm.likelihood import LikelihoodCalculator
-from sbm.mcmc import MCMCAlgorithm
+from sbm.mcmc import MCMC
 from sbm.graph_data import gd_from_networkx
 from sbm.block_data import BlockData
 
@@ -50,10 +49,10 @@ def test_swap_move_preserves_block_sizes(num_nodes, num_blocks, min_block_size, 
     likelihood_calculator = LikelihoodCalculator(block_data=block_data)
     swap_proposer = NodeSwapProposer(block_data=block_data, rng=rng)
 
-    mcmc = MCMCAlgorithm(
+    mcmc = MCMC(
         block_data=block_data,
         likelihood_calculator=likelihood_calculator,
-        change_proposer={"swap": swap_proposer},
+        change_proposer={"uniform_swap": swap_proposer},
         rng=rng,
     )
 
@@ -61,7 +60,7 @@ def test_swap_move_preserves_block_sizes(num_nodes, num_blocks, min_block_size, 
 
     # ── Run many candidate swap moves ──────────────────────────────────────
     for iter in range(iterations):
-        _delta_ll, accepted = mcmc._attempt_move(move_type="swap", temperature=1.0)
+        _delta_ll, accepted = mcmc._attempt_move(move_type="uniform_swap", temperature=1.0)
         if accepted:
             current_sizes = _sizes_from_block_data(mcmc.block_data, num_blocks)
             assert np.array_equal(reference_sizes, current_sizes), (

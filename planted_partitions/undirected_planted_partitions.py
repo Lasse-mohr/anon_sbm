@@ -23,13 +23,6 @@ For each of 100 independent repetitions we
 The script prints the mean, standard deviation and a histogram
 of the 100 Jaccard scores so you can eyeball whether the sampler
 typically finds the planted structure.
-
-Dependencies
-------------
-Only `numpy`, `scipy` and the local `sbm` package (already required by
-your project).
-
-Author: Von Nøgenmand
 """
 
 from typing import Sequence, Hashable
@@ -37,21 +30,13 @@ from collections.abc import Sequence
 import numpy as np
 from scipy.sparse import csr_array
 from scipy.optimize import linear_sum_assignment
-from sklearn.metrics import (
-    adjusted_rand_score,
-    normalized_mutual_info_score,
-)
 from tqdm import tqdm
 
 from sbm.graph_data import GraphData
 from sbm.block_assigner import (
-    UniformSmallBlockAssigner,
     MetisBlockAssigner,
 )
 from sbm.model import SBMModel
-
-
-
 
 ###############################################################################
 # utility helpers
@@ -187,14 +172,14 @@ def main(
         sbm = SBMModel(
                 initial_blocks=init_blocks,
                 rng=rng,
-                log=True,  # no logging
+                logger=None,  # no logging
             )
-        print(f"Initial ll {sbm.likelihood_calculator.ll:.3f}")
+        print(f"Initial nll {sbm.likelihood_calculator.nll:.3f}")
 
-        sbm.fit(num_iterations=n_iter,
-                min_block_size=block_size,
-                initial_temperature=temperature,
-                cooling_rate=0.999)
+        sbm.fit(
+            min_block_size=block_size,
+            initial_temperature=temperature,
+        )
 
         final_blocks = sbm.get_block_assignments()
 

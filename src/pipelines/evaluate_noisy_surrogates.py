@@ -43,13 +43,6 @@ def _generate_and_evaluate(
     # split the privacy level delta (probability of failure)
     delta, alpha = delta_sum/2, delta_sum/2
 
-    # Load empirical graph
-    g = GraphLoader.load(
-            Path(ds["path"]),
-            force_undirected=sbm_config["force_undirected"], # type: ignore
-        )
-    emp = g.adjacency
-
     # load fitted model
     fit_folder_path = sbmfit_folderpath(
         base_dir=Path("results/sbm_fits"),
@@ -83,10 +76,13 @@ def _generate_and_evaluate(
     # Generate surrogates and campare metrics
     results = []
     for i in tqdm(range(eval_config["n_surrogates"])):
+        # sample an SBM graph from the sbm fit
+        emp = sample_sbm_graph_from_fit(sbm_fit, rng)
+
         # sample differentially private sbm-fit
         lasso_noisy_fit = noise_factory.sample_sbm_fit(rng, post='lasso') # type: ignore
 
-        # sample graph from the noisy fit
+        # sample graph from the noisy sbm fit
         private_surr = sample_sbm_graph_from_fit(lasso_noisy_fit, rng)
         private_surr = private_surr.adjacency
 

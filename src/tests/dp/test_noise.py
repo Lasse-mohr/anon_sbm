@@ -94,6 +94,7 @@ def test_heterogeneous_noise_equal():
     sig = _extract_sigma_e(oz)
     print(f'sigma_e: {sig}')
 
+    diag = sig[[0, 4, 8]]  # diagonal σ’s
     # diagonal σ’s should all be identical.
     # Account for the fact that only upper-tri is stored.
     assert np.allclose(diag, diag[0])

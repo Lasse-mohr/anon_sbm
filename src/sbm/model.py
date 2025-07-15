@@ -16,7 +16,7 @@ from sbm.block_change_proposers import (
 )
 
 from sbm.node_mover import NodeMover
-from sbm.mcmc import MCMCAlgorithm
+from sbm.mcmc import MCMC, PrivatePartitionMCMC
 
 from sbm.io import SBMFit
 from sbm.utils.logger import CSVLogger
@@ -26,10 +26,12 @@ class SBMModel:
                 initial_blocks: BlockData,
                 rng: np.random.Generator,
                 likelihood_type: LikelihoodType = "bernoulli",
-                log: bool = True,
+                logger: Optional[CSVLogger] = None,
                 change_freq = { # probabilities of trying each move type
                     "edge_based_swap": 1.0,
-                }
+                },
+                private_sbm: bool = False, # whether to use the private partitioning MCMC
+                eps: float = 1.0, # privacy budget for private partitioning
         ):
 
         self._best_block_assignment = None
@@ -74,20 +76,30 @@ class SBMModel:
                         use_numpy=True,
                     ),
         }
-        self.mcmc_algorithm = MCMCAlgorithm(
-            block_data = self.block_data,
-            likelihood_calculator = self.likelihood_calculator,
-            change_proposer = change_proposer, # type: ignore
-            change_freq = change_freq, # type: ignore
-            rng = self.rng,
-            log=log
-        )
+
+        if private_sbm:
+            self.mcmc_algorithm = PrivatePartitionMCMC(
+                block_data=self.block_data,
+                likelihood_calculator=self.likelihood_calculator,
+                change_proposer=change_proposer, # type: ignore
+                rng=self.rng,
+                logger=logger,
+                epsilon=eps,
+            )
+        else:
+            self.mcmc_algorithm = MCMC(
+                block_data = self.block_data,
+                likelihood_calculator = self.likelihood_calculator,
+                change_proposer = change_proposer, # type: ignore
+                change_freq = change_freq, # type: ignore
+                rng = self.rng,
+                logger=logger
+            )
 
     def fit(self,
         min_block_size: int,
-        cooling_rate: float,
+        cooling_rate: float=1-1e-4,
         max_blocks: Optional[int] = None,
-        logger: Optional[CSVLogger] = None,
         patience: Optional[int] = None,
         return_nll: bool = False,
         max_num_iterations: int=int(10**6),
@@ -100,7 +112,6 @@ class SBMModel:
             initial_temperature=initial_temperature,
             cooling_rate=cooling_rate,
             max_blocks=max_blocks,
-            logger=logger,
             patience=patience,
         )
 

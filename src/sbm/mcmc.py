@@ -1,8 +1,15 @@
+""" 
+Code for the MCMC algorithm used in the Stochastic Block Model (SBM) fitting.
+This code implements the MCMC algorithm for both standard and private partitioning scenarios.
+It includes the main MCMC algorithm class and a specialized class for private partitioning with differential privacy
+"""
 from typing import Optional, Tuple, Dict, Optional, List
+from collections import deque
 import numpy as np
 
 #from line_profiler import profile
 from numba import jit
+from math import exp
 
 #from src.sbm.graph_data import GraphData
 from sbm.block_data import BlockData
@@ -10,6 +17,7 @@ from sbm.likelihood import LikelihoodCalculator
 from sbm.block_change_proposers import ChangeProposer
 from sbm.node_mover import NodeMover
 from sbm.utils.logger import CSVLogger
+from sbm.mcmc_diagnostics import OnlineDiagnostics
 
 from sbm.block_change_proposers import ChangeProposer, ChangeProposerName
 
@@ -17,13 +25,16 @@ from sbm.block_change_proposers import ChangeProposer, ChangeProposerName
 ChangeProposerDict = Dict[ChangeProposerName, ChangeProposer] 
 ChangeFreqDict = Dict[ChangeProposerName, float]
 
-class MCMCAlgorithm:
+class MCMC:
     def __init__(self,
                  block_data: BlockData,
                  likelihood_calculator: LikelihoodCalculator,
                  change_proposer: ChangeProposerDict,
                  rng: np.random.Generator,
-                 log: bool = True,
+                 logger: Optional[CSVLogger] = None,
+                 monitor: bool = True,
+                 diag_lag: int =1000,
+                 diag_checkpoints: int = 3000,
                  change_freq: Optional[ChangeFreqDict] = None,
                  ):
 
@@ -34,7 +45,19 @@ class MCMCAlgorithm:
         self.node_mover = NodeMover(block_data=block_data)
         self.rng = rng
         self.current_nll = self.likelihood_calculator.nll
-        self.log = log # True if logging is enabled, False otherwise.
+        self.logger = logger # True if logging is enabled, False otherwise.
+
+        ### set up mcmc diagnostics (R̂ and ESS)
+        # only for estimating convergence diagnostics for dp patitioning
+        self._monitor = monitor
+        if monitor:
+            self._diag= OnlineDiagnostics(window=diag_lag)
+            self._diag_checkpoints = diag_checkpoints
+            self._off_diag = self._select_off_pairs(max_panel=diag_checkpoints)
+        else:
+            self._diag = None
+            self._diag_checkpoints = 0
+            self._off_diag = []
 
         # store the best block assignment and likelihood
         self._best_block_assignment = block_data.blocks.copy()
@@ -47,7 +70,6 @@ class MCMCAlgorithm:
             cooling_rate: float = 0.99,
             min_block_size: Optional[int] = None,
             max_blocks: Optional[int] = None,
-            logger: Optional[CSVLogger] = None,
             patience: Optional[int] = None,
         ) -> List[float]:
         """
@@ -60,6 +82,7 @@ class MCMCAlgorithm:
         :param target_acceptance_rate: Desired acceptance rate for adaptive adjustments (default 25%).
         :param max_blocks: Optional maximum number of blocks allowed.
         """
+        acc_hist = deque(maxlen=1000)          # for accept‑rate window
         temperature = initial_temperature
         current_nll = self.likelihood_calculator.nll
         acceptance_rate = 0 # acceptance rate of moves between logging
@@ -70,8 +93,8 @@ class MCMCAlgorithm:
             n_nodes = self.block_data.graph_data.num_nodes
             patience = min(int(0.1 * n_nodes*(n_nodes - 1) // 2), 10**5)
 
-        if logger:
-            logger.log(0, current_nll, acceptance_rate, temperature)
+        if self.logger:
+            self.logger.log(0, current_nll, acceptance_rate, temperature)
 
         n_steps_declined = 0
         for iteration in range(1, max_num_iterations + 1):
@@ -83,12 +106,19 @@ class MCMCAlgorithm:
                 temperature=temperature,
                 max_blocks=max_blocks
                 )
+            acc_hist.append(move_accepted)
+
+            # --- diagnostics update --------------------------------
+            if self._monitor and self._diag is not None:
+                diag_vec = self.block_data.diagonal_counts()
+                off_vec  = self.block_data.counts_for_pairs(self._off_diag)
+                self._diag.update(self.current_nll, diag_vec, off_vec)
 
             # update likelihood and best assignment so far
             if move_accepted :
                 self.current_nll += delta_nll
                 n_steps_declined = 0
-                if logger:
+                if self.logger:
                     acceptance_rate += 1
 
                 if self.current_nll < self.best_nll:
@@ -102,10 +132,26 @@ class MCMCAlgorithm:
 
             temperature = self._update_temperature(temperature, cooling_rate)
 
-            if logger and iteration % logger.log_every == 0:
-                acceptance_rate = acceptance_rate / logger.log_every
-                logger.log(iteration, self.current_nll, acceptance_rate, temperature)
-                acceptance_rate = 0
+            # --- logging --------------------------------
+            if (self.logger is not None and
+                iteration % self.logger.log_every == 0
+                ):
+                if (self._monitor and
+                    self._diag is not None and
+                    iteration % self._diag_checkpoints == 0
+                    ):
+                    rhat, ess = self._diag.summary()
+                else:
+                    rhat, ess = np.nan, np.nan
+
+                self.logger.log(
+                    iteration          = iteration,
+                    neg_loglike        = self.current_nll,
+                    accept_rate_window = float(np.mean(acc_hist or [0])),
+                    temperature        = 1.0,          # or self.T if annealing
+                    rhat_max           = rhat,
+                    ess_min            = ess,
+                )
             
             if patience is not None and n_steps_declined >= patience:
                 print(f"Stopping early after {iteration} iterations due to patience limit.")
@@ -187,3 +233,68 @@ class MCMCAlgorithm:
         :return: The updated temperature.
         """
         return current_temperature * cooling_rate
+
+    # --------------------------------------------------------------
+    def _select_off_pairs(self, max_panel: int):
+        """ 
+        Randomly sample off pairs to monitor for diagnostics. 
+
+        First we select pairs that currently have at least one edge,
+        then we add random pairs until we reach the desired size.
+        """
+        B = len(self.block_data.block_sizes)
+        want = min(max_panel, 2 * B) # number of pairs to sample and track
+
+        ### get all pairs that currently have >= 1 edge
+        nz = [(r, s) for r in range(B) for s in range(r + 1, B)
+              if self.block_data.block_connectivity[r, s] > 0]
+
+        self.rng.shuffle(nz)
+        panel = nz[:want]
+
+        # 2. add random extras until size == want
+        while len(panel) < want:
+            r, s = self.rng.choice(range(B), 2)
+            if r > s:
+                r, s = s, r
+            if (r, s) not in panel:
+                panel.append((r, s))
+
+        return panel
+
+### --------------------------------------------------------------------------- 
+#### MCMC Algorithm for Private Partitioning
+### --------------------------------------------------------------------------- 
+class PrivatePartitionMCMC(MCMC):
+    """
+    MCMC sampler that targets the node-level DP Boltzmann distribution
+        P(z) ∝ exp(-ε · L(z) / (2Δ))
+    where L is the negative log-likelihood and Δ is its global
+    sensitivity (Δ = 1 for Bernoulli SBMs).
+    """
+    def __init__(self, *, epsilon: float, delta_ll_sensitivity=1.0, temperature=1, **kwargs):
+        super().__init__(**kwargs)
+        self.eps   = float(epsilon)
+        self.delta = float(delta_ll_sensitivity)
+        self.temperatur = temperature
+
+    # --- single move ----------------------------------------------------
+    def _accept_prob(self, delta_nll: float) -> float:
+        """Metropolis ratio specialised to the exponential mechanism."""
+        ratio = exp(- self.eps * delta_nll / (2.0 * self.delta))
+        return min(1.0, ratio)
+
+    def _attempt_move(self,
+                      move_type: ChangeProposerName,
+                      temperature: float,
+                      max_blocks: Optional[int] = None,
+                      min_block_size: Optional[int] = None,
+                      ) -> Tuple[float, bool]:
+        # invoke parent proposer / Δnll code
+        delta_nll, accepted = super()._attempt_move(
+            move_type=move_type,
+            temperature=temperature,      # no annealing in a DP chain
+            max_blocks=max_blocks,
+            min_block_size=min_block_size
+        )
+        return delta_nll, accepted
